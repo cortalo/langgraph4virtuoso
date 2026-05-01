@@ -16,10 +16,14 @@ circuits:
       PMOS source at VDD, NMOS source at GND/VSS.
     signature:
       device_count: "exactly 1 NMOS + 1 PMOS per inverter instance"
-      gate: "PMOS.g and NMOS.g connected to the same net (the input)"
+      gate: "PMOS.g and NMOS.g MUST be on the same net (the input) — this is mandatory"
       drain: "PMOS.d and NMOS.d connected to the same net (the output)"
       pmos_source: "PMOS.s connected to VDD (a net whose only active connections are PMOS sources)"
       nmos_source: "NMOS.s connected to VSS/GND (a net whose only active connections are NMOS sources)"
+      disqualifier: >
+        If PMOS.g and NMOS.g are on DIFFERENT nets, it is NOT an inverter — do not classify it
+        as one even if their drains share a net. A diode-connected NMOS (gate tied to its own drain)
+        paired with a PMOS whose gate is a separate input signal is a current mirror load, not an inverter.
       note: >
         A schematic with 2 PMOS + 2 NMOS is likely TWO inverters (e.g. a buffer), not one NAND2.
         Identify each complementary pair independently by matching gate and drain nets.
@@ -28,3 +32,76 @@ circuits:
       - Place PMOS at y = pmos_nmos spacing (1.0 um above NMOS).
       - For the nth inverter (0-indexed), use x = n * instance_x_step (2.0 um).
         e.g. first inverter at x=0, second at x=2.0, third at x=4.0, and so on.
+
+  five_transistor_ota:
+    topology: >
+      5-transistor OTA: a differential pair (2 devices of the same type, NMOS or PMOS),
+      a current mirror load (2 devices of the opposite type), and a tail current source
+      (1 device of the same type as the diff pair). Total: 3 of one type + 2 of the other.
+    signature:
+      device_count: >
+        Core 5T structure: 3 devices of one type (diff pair x2 + tail x1) and 2 of the opposite type (mirror load x2).
+        The tail may itself be driven by a current mirror (adding 1-2 extra devices of the same type as the tail),
+        making the total 6-7 transistors. Count the core structure, not the bias generation devices.
+      tail_node: >
+        The diff pair is identified by finding two devices of the same type whose sources share
+        an INTERNAL net (not VDD or VSS) that is also driven by the drain of a third device of
+        the same type — that third device is the tail current source.
+        If two devices share a source that connects directly to VDD or VSS (a supply rail),
+        they are a current mirror, NOT a differential pair.
+      diode_connected: "one load device has gate tied to its own drain (current mirror reference)"
+      mirror_copy: "second load device gate tied to the reference's gate/drain (current mirror copy)"
+      load_connections: "each load device drain connects to one diff-pair device drain"
+      diff_pair_sources: "diff pair sources tied to the same supply rail as the tail (VSS for NMOS tail, VDD for PMOS tail)"
+      load_sources: "both load devices sources tied to the opposite supply rail"
+      inputs: "the two diff-pair gate nets are the differential inputs"
+      output: "the mirror copy load device drain (same net as the non-diode diff-pair device drain)"
+      bias: "tail device gate connected to a bias net"
+      note: >
+        The diff pair may be NMOS (tail sinks to VSS, load is PMOS) or PMOS (tail sources from VDD, load is NMOS).
+        Identify the diff pair type first from the tail node pattern, then assign load type accordingly.
+    placement:
+      - Identify diff_pair_type (NMOS or PMOS) and load_type (opposite).
+      - Place the two diff-pair devices side by side at y=0 — first at x=0, second at x=instance_x_step (2.0 um).
+      - Place the two load devices directly opposite the diff pair (above for NMOS diff pair, below for PMOS diff pair)
+        at y = pmos_nmos (1.0 um) or y = -pmos_nmos (-1.0 um) respectively. Mirror reference at x=0, copy at x=instance_x_step.
+      - Place the tail device centered below (NMOS tail) or above (PMOS tail) the diff pair
+        at x = instance_x_step / 2 (1.0 um), y = -instance_x_step (-2.0 um) or y = 2 * pmos_nmos (2.0 um).
+      - Align load devices directly above/below their corresponding diff-pair devices to keep drain connections short.
+
+  differential_pair:
+    topology: >
+      Two devices of the same type (both NMOS or both PMOS) whose sources are tied together
+      (tail node), gates are the two differential inputs, and drains are independent.
+      Often a sub-block of a larger topology such as a 5T OTA.
+    signature:
+      device_count: "exactly 2 devices of the same type"
+      shared_source: "both devices share the same source net (tail node)"
+      gates: "the two gate nets are independent — one for Vin+, one for Vin-"
+      drains: "drain nets are independent (each connects to a load device or output)"
+      note: >
+        A differential pair is frequently embedded inside a 5T OTA. When it appears as
+        part of a larger topology, label it as a sub_group rather than a standalone topology.
+    placement:
+      - Place both devices side by side in a row.
+      - For NMOS diff pair — y=0, first device at x=0, second at x=instance_x_step (2.0 um).
+      - For PMOS diff pair — y=pmos_nmos (1.0 um), first device at x=0, second at x=instance_x_step (2.0 um).
+
+  current_mirror:
+    topology: >
+      A current mirror: one diode-connected reference device and one or more copy devices,
+      all of the same type (all NMOS or all PMOS). The reference sets the current;
+      copies replicate it. Sources all share the same supply rail.
+    signature:
+      device_count: "2 or more devices of the same type (all NMOS or all PMOS)"
+      diode_connected: "exactly one device has its gate tied to its own drain (the reference)"
+      mirror_copies: "all other devices have their gates tied to the reference gate/drain net"
+      sources: "all device sources connected to the same supply rail (VSS for NMOS, VDD for PMOS)"
+      note: >
+        Distinguish from the load mirror in a 5T OTA: a standalone current mirror has no diff-pair
+        tail node and its drain nets are independent output currents, not tied to other active devices.
+    placement:
+      - Place all devices in a single row at y = 0.
+      - Place the reference (diode-connected) device first at x = 0.
+      - Place each copy at x = n * instance_x_step (2.0 um) where n is 1, 2, 3, ...
+      - All devices share the same y coordinate.
