@@ -1,20 +1,23 @@
 """Analog layout agent — reads a schematic then places instances in a new layout.
 
 Usage:
-    python example/create_layout_agent.py
-    python example/create_layout_agent.py --debug
+    python example/agent_placement_demo.py
+    python example/agent_placement_demo.py --debug
 """
 
 import json
 import argparse
 import logging
-import threading
 from pathlib import Path
+from typing import Annotated
+from typing_extensions import TypedDict
 import yaml
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
-from langgraph.graph import StateGraph, START, END, MessagesState
-from langgraph.prebuilt import ToolNode, tools_condition
+from langchain_core.tools import InjectedToolCallId
+from langgraph.graph import StateGraph, START, END, add_messages
+from langgraph.prebuilt import ToolNode, tools_condition, InjectedState
+from langgraph.types import Command
 
 from virtuoso_bridge import VirtuosoClient, decode_skill_output
 from virtuoso_bridge.virtuoso.schematic.reader import read_schematic
@@ -22,6 +25,21 @@ from virtuoso_bridge.virtuoso.schematic.reader import read_schematic
 log = logging.getLogger(__name__)
 
 client = VirtuosoClient.local(port=65432)
+
+# ---------------------------------------------------------------------------
+# Graph state
+# ---------------------------------------------------------------------------
+
+def _merge_registry(old: dict, new: dict) -> dict:
+    """Reducer that merges placement registry updates from concurrent tool calls."""
+    return {**old, **new}
+
+
+class LayoutState(TypedDict):
+    messages: Annotated[list, add_messages]
+    placement_registry: Annotated[dict[str, tuple[int, int]], _merge_registry]
+    schematic_devices: list[str]   # set once by read_and_analyse_schematic
+
 
 # ---------------------------------------------------------------------------
 # Placement guidelines
@@ -59,7 +77,6 @@ def _build_system_prompt(rules: dict) -> str:
         lines.append(f"Topology: {circuit['topology'].strip()}")
         lines.append("Rules:")
         for rule in circuit["placement"]:
-            # substitute spacing values so the LLM sees concrete numbers
             rendered = rule.format(**{k.replace("-", "_"): v for k, v in spacing.items()})
             lines.append(f"  - {rendered}")
     lines += [
@@ -69,6 +86,8 @@ def _build_system_prompt(rules: dict) -> str:
         "1. Call read_and_analyse_schematic — it returns both the schematic and identified topologies.",
         "2. For each topology in the result, look up its placement rules above and call place_instance",
         "   for every device. Coordinates must follow the rules — do not use arbitrary values.",
+        "   IMPORTANT: call place_instance for ONE device per turn. Wait for the result before",
+        "   calling it again. This ensures the placement registry is up to date for collision checks.",
         "3. Call is_placement_complete to verify every device has been placed.",
         "   If INCOMPLETE, place the missing devices and call is_placement_complete again.",
         "   Only give a final response after is_placement_complete returns COMPLETE.",
@@ -83,21 +102,6 @@ def _build_system_prompt(rules: dict) -> str:
 _SYSTEM_PROMPT = _build_system_prompt(_RULES)
 
 llm = ChatOpenAI(model="gpt-4o")
-
-# ---------------------------------------------------------------------------
-# Placement registry — tracks placed instances within one layout session
-# ---------------------------------------------------------------------------
-
-# Coordinates stored as integer nanometers (um * 1000) to avoid float comparison issues.
-_placement_registry: dict[str, tuple[int, int]] = {}
-_schematic_devices: set[str] = set()
-
-
-_placement_lock = threading.Lock()
-
-
-def _to_nanocoords(x: float, y: float) -> tuple[int, int]:
-    return round(x * 1000), round(y * 1000)
 
 # ---------------------------------------------------------------------------
 # Topology identification
@@ -179,6 +183,14 @@ def _build_topology_prompt(rules: dict) -> str:
 _TOPOLOGY_SYSTEM_PROMPT = _build_topology_prompt(_RULES)
 
 
+def _to_nanocoords(x: float, y: float) -> tuple[int, int]:
+    return round(x * 1000), round(y * 1000)
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
 def check_layout_exists(lib: str, cell: str) -> str:
     """Check whether a layout cellview already exists for the given lib/cell.
 
@@ -195,7 +207,12 @@ def check_layout_exists(lib: str, cell: str) -> str:
     return output
 
 
-def delete_layout(lib: str, cell: str) -> str:
+def delete_layout(
+    lib: str,
+    cell: str,
+    tool_call_id: Annotated[str, InjectedToolCallId()],
+    state: Annotated[LayoutState, InjectedState()],
+) -> Command:
     """Delete the layout cellview for the given lib/cell.
 
     Args:
@@ -222,12 +239,19 @@ let((ddview)
     result = client.execute_skill(skill)
     output = decode_skill_output(result.output)
     log.info("delete_layout → %s", output)
-    _placement_registry.clear()
-    _schematic_devices.clear()
-    return output
+    return Command(update={
+        "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
+        "placement_registry": {},
+        "schematic_devices": [],
+    })
 
 
-def read_and_analyse_schematic(lib: str, cell: str) -> str:
+def read_and_analyse_schematic(
+    lib: str,
+    cell: str,
+    tool_call_id: Annotated[str, InjectedToolCallId()],
+    state: Annotated[LayoutState, InjectedState()],
+) -> Command:
     """Read the schematic and identify all circuit topologies in one step.
 
     Args:
@@ -252,8 +276,7 @@ def read_and_analyse_schematic(lib: str, cell: str) -> str:
         },
         "pins": list(data["pins"].keys()),
     }
-    _schematic_devices.clear()
-    _schematic_devices.update(i["name"] for i in schematic["instances"])
+    schematic_devices = [i["name"] for i in schematic["instances"]]
     log.info("read_and_analyse_schematic schematic → %s", json.dumps(schematic, indent=2))
 
     response = llm.invoke([
@@ -267,7 +290,12 @@ def read_and_analyse_schematic(lib: str, cell: str) -> str:
     topologies = response.content
     log.info("read_and_analyse_schematic topologies → %s", topologies)
 
-    return json.dumps({"schematic": schematic, "topologies": topologies}, indent=2)
+    output = json.dumps({"schematic": schematic, "topologies": topologies}, indent=2)
+    return Command(update={
+        "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
+        "schematic_devices": schematic_devices,
+        "placement_registry": {},
+    })
 
 
 def place_instance(
@@ -279,7 +307,9 @@ def place_instance(
     x: float,
     y: float,
     orientation: str = "R0",
-) -> str:
+    tool_call_id: Annotated[str, InjectedToolCallId()] = None,
+    state: Annotated[LayoutState, InjectedState()] = None,
+) -> Command:
     """Place a layout instance in the target cell at the given position.
 
     Args:
@@ -292,22 +322,21 @@ def place_instance(
         y: y coordinate
         orientation: orientation string e.g. R0, R90, MY, MX
     """
+    registry = state["placement_registry"]
     mc = _to_nanocoords(x, y)
 
-    with _placement_lock:
-        if inst_name in _placement_registry:
-            x_prev, y_prev = (_placement_registry[inst_name][0] / 1000, _placement_registry[inst_name][1] / 1000)
-            log.info("place_instance: %s already placed at (%s, %s), skipping", inst_name, x_prev, y_prev)
-            return f"{inst_name} already placed at ({x_prev}, {y_prev}) — not moved"
+    if inst_name in registry:
+        x_prev, y_prev = registry[inst_name][0] / 1000, registry[inst_name][1] / 1000
+        msg = f"{inst_name} already placed at ({x_prev}, {y_prev}) — not moved"
+        log.info("place_instance: %s", msg)
+        return Command(update={"messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)]})
 
-        occupied = {v: k for k, v in _placement_registry.items()}
-        if mc in occupied:
-            conflict = occupied[mc]
-            log.warning("place_instance: (%s, %s) already occupied by %s", x, y, conflict)
-            return f"ERROR: ({x}, {y}) already occupied by {conflict} — choose different coordinates"
-
-        # Reserve the slot before releasing the lock so no other thread can claim it
-        _placement_registry[inst_name] = mc
+    occupied = {v: k for k, v in registry.items()}
+    if mc in occupied:
+        conflict = occupied[mc]
+        msg = f"ERROR: ({x}, {y}) already occupied by {conflict} — choose different coordinates"
+        log.warning("place_instance: %s", msg)
+        return Command(update={"messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)]})
 
     log.info("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
               inst_lib, inst_cell, target_lib, target_cell, inst_name, x, y, orientation)
@@ -322,17 +351,22 @@ let((cv)
     result = client.execute_skill(skill)
     output = decode_skill_output(result.output)
     log.info("place_instance → %s", output)
-    return output
+    return Command(update={
+        "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
+        "placement_registry": {inst_name: mc},
+    })
 
 
-
-def is_placement_complete() -> str:
+def is_placement_complete(
+    state: Annotated[LayoutState, InjectedState()],
+) -> str:
     """Check whether every device from the schematic has been placed in the layout.
 
     Returns a summary of placed and missing devices.
     """
-    missing = _schematic_devices - set(_placement_registry.keys())
-    placed = set(_placement_registry.keys())
+    all_devices = set(state["schematic_devices"])
+    placed = set(state["placement_registry"].keys())
+    missing = all_devices - placed
     if missing:
         log.info("is_placement_complete: missing %s", missing)
         return f"INCOMPLETE — {len(missing)} device(s) not yet placed: {sorted(missing)}. Placed so far: {sorted(placed)}"
@@ -344,7 +378,7 @@ tools = [check_layout_exists, delete_layout, read_and_analyse_schematic, place_i
 llm_with_tools = llm.bind_tools(tools)
 
 
-def tool_calling_llm(state: MessagesState):
+def tool_calling_llm(state: LayoutState):
     response = llm_with_tools.invoke([SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"])
     if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
@@ -354,7 +388,7 @@ def tool_calling_llm(state: MessagesState):
     return {"messages": [response]}
 
 
-builder = StateGraph(MessagesState)
+builder = StateGraph(LayoutState)
 builder.add_node("tool_calling_llm", tool_calling_llm)
 builder.add_node("tools", ToolNode(tools))
 builder.add_edge(START, "tool_calling_llm")
@@ -385,5 +419,9 @@ if __name__ == "__main__":
         "3. Call place_instance for every device using the placement guidelines. "
         "Do not stop after the analysis — place every instance before responding."
     ))]
-    result = graph.invoke({"messages": messages})
+    result = graph.invoke({
+        "messages": messages,
+        "placement_registry": {},
+        "schematic_devices": [],
+    })
     result["messages"][-1].pretty_print()
