@@ -38,10 +38,11 @@ def _merge_registry(old: dict, new: dict) -> dict:
 class LayoutState(TypedDict):
     messages: Annotated[list, add_messages]
     placement_registry: Annotated[dict[str, tuple[int, int]], _merge_registry]
-    schematic: dict       # set once by read_and_analyse_schematic
-    topologies: str       # raw topology analysis string, set alongside schematic
-    target_lib: str       # layout target library, set at invocation
-    target_cell: str      # layout target cell, set at invocation
+    schematic: dict          # set once by read_and_analyse_schematic
+    topologies: str          # raw topology analysis string, set alongside schematic
+    target_lib: str          # layout target library, set at invocation
+    target_cell: str         # layout target cell, set at invocation
+    placement_errors: list[str]  # accumulated failures; cleared on each successful placement
 
 
 # ---------------------------------------------------------------------------
@@ -325,6 +326,7 @@ def place_instance(
         orientation: orientation string e.g. R0, R90, MY, MX
     """
     registry = state["placement_registry"]
+    errors = state["placement_errors"]
     mc = _to_nanocoords(x, y)
 
     if inst_name in registry:
@@ -338,7 +340,10 @@ def place_instance(
         conflict = occupied[mc]
         msg = f"ERROR: ({x}, {y}) already occupied by {conflict} — choose different coordinates"
         log.warning("place_instance: %s", msg)
-        return Command(update={"messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)]})
+        return Command(update={
+            "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+            "placement_errors": errors + [msg],
+        })
 
     log.info("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
               inst_lib, inst_cell, target_lib, target_cell, inst_name, x, y, orientation)
@@ -352,15 +357,19 @@ let((cv inst)
 """
     result = client.execute_skill(skill)
     if result.errors or result.is_nil:
-        errors = "; ".join(result.errors) if result.errors else "SKILL returned nil"
-        msg = f"ERROR: could not place {inst_name} ({inst_lib}/{inst_cell}) in {target_lib}/{target_cell}: {errors}"
+        skill_err = "; ".join(result.errors) if result.errors else "SKILL returned nil"
+        msg = f"ERROR: could not place {inst_name} ({inst_lib}/{inst_cell}) in {target_lib}/{target_cell}: {skill_err}"
         log.warning("place_instance: %s", msg)
-        return Command(update={"messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)]})
+        return Command(update={
+            "messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)],
+            "placement_errors": errors + [msg],
+        })
     output = decode_skill_output(result.output)
     log.info("place_instance → %s", output)
     return Command(update={
         "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
         "placement_registry": {inst_name: mc},
+        "placement_errors": [],
     })
 
 
@@ -414,6 +423,9 @@ def _build_placement_message(state: LayoutState) -> HumanMessage:
         f"Still to place: {remaining}",
         f"Place the next unplaced device into target_lib='{lib}', target_cell='{cell}'.",
     ]
+    if state.get("placement_errors"):
+        errors_block = "\n".join(f"  - {e}" for e in state["placement_errors"])
+        parts.append(f"Previous failed attempts (do NOT retry these coordinates):\n{errors_block}")
     return HumanMessage(content="\n\n".join(parts))
 
 
@@ -494,6 +506,7 @@ if __name__ == "__main__":
         "topologies": "",
         "target_lib": lib,
         "target_cell": cell,
+        "placement_errors": [],
     })
     print("\nPlacement complete. Registry:")
     for name, (xnm, ynm) in result["placement_registry"].items():
