@@ -38,7 +38,10 @@ def _merge_registry(old: dict, new: dict) -> dict:
 class LayoutState(TypedDict):
     messages: Annotated[list, add_messages]
     placement_registry: Annotated[dict[str, tuple[int, int]], _merge_registry]
-    schematic_devices: list[str]   # set once by read_and_analyse_schematic
+    schematic: dict       # set once by read_and_analyse_schematic
+    topologies: str       # raw topology analysis string, set alongside schematic
+    target_lib: str       # layout target library, set at invocation
+    target_cell: str      # layout target cell, set at invocation
 
 
 # ---------------------------------------------------------------------------
@@ -86,8 +89,6 @@ def _build_system_prompt(rules: dict) -> str:
         "1. Call read_and_analyse_schematic — it returns both the schematic and identified topologies.",
         "2. For each topology in the result, look up its placement rules above and call place_instance",
         "   for every device. Coordinates must follow the rules — do not use arbitrary values.",
-        "   IMPORTANT: call place_instance for ONE device per turn. Wait for the result before",
-        "   calling it again. This ensures the placement registry is up to date for collision checks.",
         "3. Call is_placement_complete to verify every device has been placed.",
         "   If INCOMPLETE, place the missing devices and call is_placement_complete again.",
         "   Only give a final response after is_placement_complete returns COMPLETE.",
@@ -242,7 +243,8 @@ let((ddview)
     return Command(update={
         "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
         "placement_registry": {},
-        "schematic_devices": [],
+        "schematic": {},
+        "topologies": "",
     })
 
 
@@ -276,7 +278,6 @@ def read_and_analyse_schematic(
         },
         "pins": list(data["pins"].keys()),
     }
-    schematic_devices = [i["name"] for i in schematic["instances"]]
     log.info("read_and_analyse_schematic schematic → %s", json.dumps(schematic, indent=2))
 
     response = llm.invoke([
@@ -293,7 +294,8 @@ def read_and_analyse_schematic(
     output = json.dumps({"schematic": schematic, "topologies": topologies}, indent=2)
     return Command(update={
         "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
-        "schematic_devices": schematic_devices,
+        "schematic": schematic,
+        "topologies": topologies,
         "placement_registry": {},
     })
 
@@ -341,14 +343,19 @@ def place_instance(
     log.info("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
               inst_lib, inst_cell, target_lib, target_cell, inst_name, x, y, orientation)
     skill = f"""
-let((cv)
+let((cv inst)
     cv = dbOpenCellViewByType("{target_lib}" "{target_cell}" "layout" "maskLayout" "a")
-    dbCreateParamInstByMasterName(cv "{inst_lib}" "{inst_cell}" "layout" "{inst_name}" list({x} {y}) "{orientation}")
+    inst = dbCreateParamInstByMasterName(cv "{inst_lib}" "{inst_cell}" "layout" "{inst_name}" list({x} {y}) "{orientation}")
     dbSave(cv)
     dbClose(cv)
-    "placed {inst_name} at ({x} {y})")
+    sprintf(nil "placed {inst_name} at ({x} {y})"))
 """
     result = client.execute_skill(skill)
+    if result.errors or result.is_nil:
+        errors = "; ".join(result.errors) if result.errors else "SKILL returned nil"
+        msg = f"ERROR: could not place {inst_name} ({inst_lib}/{inst_cell}) in {target_lib}/{target_cell}: {errors}"
+        log.warning("place_instance: %s", msg)
+        return Command(update={"messages": [ToolMessage(content=msg, tool_call_id=tool_call_id)]})
     output = decode_skill_output(result.output)
     log.info("place_instance → %s", output)
     return Command(update={
@@ -364,7 +371,7 @@ def is_placement_complete(
 
     Returns a summary of placed and missing devices.
     """
-    all_devices = set(state["schematic_devices"])
+    all_devices = {i["name"] for i in state["schematic"].get("instances", [])}
     placed = set(state["placement_registry"].keys())
     missing = all_devices - placed
     if missing:
@@ -375,11 +382,57 @@ def is_placement_complete(
 
 
 tools = [check_layout_exists, delete_layout, read_and_analyse_schematic, place_instance, is_placement_complete]
-llm_with_tools = llm.bind_tools(tools)
+llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=False)
+
+
+def _build_pre_placement_message(lib: str, cell: str) -> HumanMessage:
+    """Task message for the pre-schematic phase: instructs the LLM to read and analyse."""
+    return HumanMessage(content=(
+        f"Create a layout for library '{lib}', cell '{cell}'. "
+        f"1. Check if the layout '{lib}/{cell}' exists and delete it if so. "
+        f"2. Call read_and_analyse_schematic to read the schematic '{lib}/{cell}' "
+        f"   and identify all circuit topologies. "
+        f"Do not start placing devices yet — wait until the schematic is analysed."
+    ))
+
+
+def _build_placement_message(state: LayoutState) -> HumanMessage:
+    """Focused placement message built from current state."""
+    lib, cell = state["target_lib"], state["target_cell"]
+    placed = {k: (v[0] / 1000, v[1] / 1000) for k, v in state["placement_registry"].items()}
+    all_devices = {i["name"] for i in state["schematic"].get("instances", [])}
+    remaining = sorted(all_devices - set(state["placement_registry"]))
+    parts = [
+        f"Place all schematic devices into the layout '{lib}/{cell}'.",
+        f"Schematic:\n{json.dumps(state['schematic'], indent=2)}",
+        f"Identified topologies:\n{state['topologies']}",
+        f"Already placed ({len(placed)}/{len(all_devices)}):\n{json.dumps(placed, indent=2)}",
+        f"Still to place: {remaining}",
+        f"Place the next unplaced device into target_lib='{lib}', target_cell='{cell}'.",
+    ]
+    return HumanMessage(content="\n\n".join(parts))
+
+
+def _last_round(messages: list) -> list:
+    """Return the last AIMessage and all ToolMessages that follow it."""
+    for i in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[i], AIMessage):
+            return messages[i:]
+    return []
 
 
 def tool_calling_llm(state: LayoutState):
-    response = llm_with_tools.invoke([SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"])
+    if state["schematic"]:
+        # Placement phase: focused placement message + last AI/Tool round for immediate feedback
+        messages = (
+            [SystemMessage(content=_SYSTEM_PROMPT), _build_placement_message(state)]
+            + _last_round(state["messages"])
+        )
+    else:
+        # Pre-schematic phase: full history so LLM can see prior tool results
+        messages = [SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"]
+
+    response = llm_with_tools.invoke(messages)
     if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
             log.info("[LLM] tool call: %s(%s)", tc["name"], tc["args"])
@@ -412,16 +465,14 @@ if __name__ == "__main__":
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
     log.info(_SYSTEM_PROMPT)
-    messages = [HumanMessage(content=(
-        "Create a layout for library 'test', cell 'ota'. "
-        "1. Check if the layout exists and delete it if so. "
-        "2. Call read_and_analyse_schematic to get the schematic and circuit topologies. "
-        "3. Call place_instance for every device using the placement guidelines. "
-        "Do not stop after the analysis — place every instance before responding."
-    ))]
+    # specify target lib and cell here
+    lib, cell = "test", "ota"
     result = graph.invoke({
-        "messages": messages,
+        "messages": [_build_pre_placement_message(lib, cell)],
         "placement_registry": {},
-        "schematic_devices": [],
+        "schematic": {},
+        "topologies": "",
+        "target_lib": lib,
+        "target_cell": cell,
     })
     result["messages"][-1].pretty_print()
