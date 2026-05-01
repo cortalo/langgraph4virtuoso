@@ -28,12 +28,12 @@ def check_layout_exists(lib: str, cell: str) -> str:
         lib: library name
         cell: cell name
     """
-    log.debug("check_layout_exists(lib=%s, cell=%s)", lib, cell)
+    log.info("check_layout_exists(lib=%s, cell=%s)", lib, cell)
     result = client.execute_skill(
         f'if(dbOpenCellViewByType("{lib}" "{cell}" "layout" "maskLayout" "r") "exists" "not_found")'
     )
     output = decode_skill_output(result.output)
-    log.debug("check_layout_exists → %s", output)
+    log.info("check_layout_exists → %s", output)
     return output
 
 
@@ -44,7 +44,7 @@ def delete_layout(lib: str, cell: str) -> str:
         lib: library name
         cell: cell name
     """
-    log.debug("delete_layout(lib=%s, cell=%s)", lib, cell)
+    log.info("delete_layout(lib=%s, cell=%s)", lib, cell)
     skill = f"""
 let((ddview)
     foreach(win hiGetWindowList()
@@ -63,7 +63,7 @@ let((ddview)
 """
     result = client.execute_skill(skill)
     output = decode_skill_output(result.output)
-    log.debug("delete_layout → %s", output)
+    log.info("delete_layout → %s", output)
     return output
 
 
@@ -74,7 +74,7 @@ def read_schematic_tool(lib: str, cell: str) -> str:
         lib: library name
         cell: cell name
     """
-    log.debug("read_schematic_tool(lib=%s, cell=%s)", lib, cell)
+    log.info("read_schematic_tool(lib=%s, cell=%s)", lib, cell)
     data = read_schematic(client, lib, cell)
     compact = {
         "instances": [
@@ -88,7 +88,7 @@ def read_schematic_tool(lib: str, cell: str) -> str:
         "pins": list(data["pins"].keys()),
     }
     output = json.dumps(compact, indent=2)
-    log.debug("read_schematic_tool → %s", output)
+    log.info("read_schematic_tool → %s", output)
     return output
 
 
@@ -114,7 +114,7 @@ def place_instance(
         y: y coordinate
         orientation: orientation string e.g. R0, R90, MY, MX
     """
-    log.debug("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
+    log.info("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
               inst_lib, inst_cell, target_lib, target_cell, inst_name, x, y, orientation)
     skill = f"""
 let((cv)
@@ -126,7 +126,7 @@ let((cv)
 """
     result = client.execute_skill(skill)
     output = decode_skill_output(result.output)
-    log.debug("place_instance → %s", output)
+    log.info("place_instance → %s", output)
     return output
 
 
@@ -140,9 +140,9 @@ def tool_calling_llm(state: MessagesState):
     response = llm_with_tools.invoke(state["messages"])
     if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
-            log.debug("[LLM] tool call: %s(%s)", tc["name"], tc["args"])
+            log.info("[LLM] tool call: %s(%s)", tc["name"], tc["args"])
     else:
-        log.debug("[LLM] final response")
+        log.info("[LLM] final response")
     return {"messages": [response]}
 
 
@@ -160,12 +160,14 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true", help="enable debug logging")
     args = parser.parse_args()
 
-    if args.debug:
-        logging.basicConfig(
-            level=logging.DEBUG,
-            format="%(asctime)s [%(levelname)s] %(message)s",
-            datefmt="%H:%M:%S",
-        )
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    if not args.debug:
+        for noisy in ("httpx", "openai", "httpcore", "virtuoso_bridge"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
     messages = [HumanMessage(content=(
         "Create a layout for library 'test', cell 'inverter'. "
