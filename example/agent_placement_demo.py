@@ -8,6 +8,7 @@ Usage:
 import json
 import argparse
 import logging
+import threading
 from pathlib import Path
 import yaml
 from langchain_openai import ChatOpenAI
@@ -90,6 +91,9 @@ llm = ChatOpenAI(model="gpt-4o")
 # Coordinates stored as integer nanometers (um * 1000) to avoid float comparison issues.
 _placement_registry: dict[str, tuple[int, int]] = {}
 _schematic_devices: set[str] = set()
+
+
+_placement_lock = threading.Lock()
 
 
 def _to_nanocoords(x: float, y: float) -> tuple[int, int]:
@@ -290,16 +294,20 @@ def place_instance(
     """
     mc = _to_nanocoords(x, y)
 
-    if inst_name in _placement_registry:
-        x_prev, y_prev = (_placement_registry[inst_name][0] / 1000, _placement_registry[inst_name][1] / 1000)
-        log.info("place_instance: %s already placed at (%s, %s), skipping", inst_name, x_prev, y_prev)
-        return f"{inst_name} already placed at ({x_prev}, {y_prev}) — not moved"
+    with _placement_lock:
+        if inst_name in _placement_registry:
+            x_prev, y_prev = (_placement_registry[inst_name][0] / 1000, _placement_registry[inst_name][1] / 1000)
+            log.info("place_instance: %s already placed at (%s, %s), skipping", inst_name, x_prev, y_prev)
+            return f"{inst_name} already placed at ({x_prev}, {y_prev}) — not moved"
 
-    occupied = {v: k for k, v in _placement_registry.items()}
-    if mc in occupied:
-        conflict = occupied[mc]
-        log.warning("place_instance: (%s, %s) already occupied by %s", x, y, conflict)
-        return f"ERROR: ({x}, {y}) already occupied by {conflict} — choose different coordinates"
+        occupied = {v: k for k, v in _placement_registry.items()}
+        if mc in occupied:
+            conflict = occupied[mc]
+            log.warning("place_instance: (%s, %s) already occupied by %s", x, y, conflict)
+            return f"ERROR: ({x}, {y}) already occupied by {conflict} — choose different coordinates"
+
+        # Reserve the slot before releasing the lock so no other thread can claim it
+        _placement_registry[inst_name] = mc
 
     log.info("place_instance(%s/%s → %s/%s '%s' @ (%s, %s) %s)",
               inst_lib, inst_cell, target_lib, target_cell, inst_name, x, y, orientation)
@@ -313,7 +321,6 @@ let((cv)
 """
     result = client.execute_skill(skill)
     output = decode_skill_output(result.output)
-    _placement_registry[inst_name] = mc
     log.info("place_instance → %s", output)
     return output
 
