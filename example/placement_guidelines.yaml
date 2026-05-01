@@ -6,14 +6,25 @@ device_classification:
   pmos: ["pfet"]   # cell name substrings identifying PMOS devices
 
 spacing:
-  pmos_nmos: 1.0   # vertical gap between PMOS row and NMOS row (um)
+  pmos_nmos: 1.0        # vertical gap between PMOS row and NMOS row (um)
+  instance_x_step: 2.0  # horizontal step between successive topology instances (um)
 
 circuits:
   inverter:
     topology: >
       One PMOS + one NMOS whose gates are tied (input net), drains are tied (output net),
       PMOS source at VDD, NMOS source at GND/VSS.
+    signature:
+      device_count: "exactly 1 NMOS + 1 PMOS per inverter instance"
+      gate: "PMOS.g and NMOS.g connected to the same net (the input)"
+      drain: "PMOS.d and NMOS.d connected to the same net (the output)"
+      pmos_source: "PMOS.s connected to VDD (a net whose only active connections are PMOS sources)"
+      nmos_source: "NMOS.s connected to VSS/GND (a net whose only active connections are NMOS sources)"
+      note: >
+        A schematic with 2 PMOS + 2 NMOS is likely TWO inverters (e.g. a buffer), not one NAND2.
+        Identify each complementary pair independently by matching gate and drain nets.
     placement:
       - Place NMOS at y = 0.
       - Place PMOS at y = pmos_nmos spacing (1.0 um above NMOS).
-      - Align both devices at the same x coordinate (x = 0).
+      - For the nth inverter (0-indexed), use x = n * instance_x_step (2.0 um).
+        e.g. first inverter at x=0, second at x=2.0, third at x=4.0, and so on.

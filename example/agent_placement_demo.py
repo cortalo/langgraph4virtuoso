@@ -63,32 +63,57 @@ def _build_system_prompt(rules: dict) -> str:
             lines.append(f"  - {rendered}")
     lines += [
         "",
-        "## Analysis procedure",
+        "## Workflow",
         "",
-        "Before placing any instance, work through these steps in order:",
-        "",
-        "1. Classify every instance as NMOS, PMOS, or unknown using the `device_type`",
-        "   field in the read_schematic_tool output (cross-check with the cell name).",
-        "",
-        "2. Identify key shared nets by examining which instance terminals connect to each net:",
-        "   - Shared gate net between a PMOS and an NMOS → they form a complementary pair",
-        "     with a common input signal.",
-        "   - Shared drain net between a PMOS and an NMOS → they share a common output node.",
-        "   - A net connected only to a PMOS source (no other active device) → VDD supply rail.",
-        "   - A net connected only to an NMOS source (no other active device) → VSS / GND rail.",
-        "",
-        "3. Match the observed connection pattern to one of the known circuit topologies",
-        "   described above (e.g. inverter). Name the circuit explicitly before proceeding.",
-        "",
-        "4. Apply the placement rules for the matched topology.",
-        "   Do not use arbitrary coordinates — every coordinate must follow from the rules.",
-        "   Call place_instance for EVERY device before giving any final response.",
+        "1. Call read_and_analyse_schematic — it returns both the schematic and identified topologies.",
+        "2. For each topology in the result, look up its placement rules above and call place_instance",
+        "   for every device. Coordinates must follow the rules — do not use arbitrary values.",
+        "3. Call place_instance for EVERY device before giving any final response.",
         "   Do not describe what you are going to do — just call the tools.",
+        "",
+        "## General constraints",
+        "   No two devices may share the same (x, y) coordinates. Before calling place_instance,",
+        "   verify that the coordinates are unique across all devices being placed.",
     ]
     return "\n".join(lines)
 
 
 _SYSTEM_PROMPT = _build_system_prompt(_RULES)
+
+llm = ChatOpenAI(model="gpt-4o")
+
+# ---------------------------------------------------------------------------
+# Topology identification
+# ---------------------------------------------------------------------------
+
+def _build_topology_prompt(rules: dict) -> str:
+    lines = [
+        "You are a circuit topology analyser.",
+        "Given a JSON list of instances (each with name, cell, device_type) and a JSON net map",
+        "(net name → list of 'instance.terminal' strings), identify every distinct topology.",
+        "",
+        "Known topologies and their exact connection signatures — match against these first:",
+    ]
+    for name, circuit in rules["circuits"].items():
+        lines.append(f"\n{name.upper()}: {circuit['topology'].strip()}")
+        sig = circuit.get("signature", {})
+        for k, v in sig.items():
+            lines.append(f"  {k}: {str(v).strip()}")
+    lines += [
+        "",
+        "Return ONLY a JSON array. Each element must have:",
+        '  "topology":    circuit name',
+        '  "devices":     list of instance names forming this topology',
+        '  "input_nets":  list of input net names (exclude VDD/VSS supply rails)',
+        '  "output_nets": list of output net names (exclude VDD/VSS supply rails)',
+        "",
+        "Every instance must appear in exactly one topology entry.",
+        "Do not wrap the output in markdown fences.",
+    ]
+    return "\n".join(lines)
+
+
+_TOPOLOGY_SYSTEM_PROMPT = _build_topology_prompt(_RULES)
 
 
 def check_layout_exists(lib: str, cell: str) -> str:
@@ -137,16 +162,16 @@ let((ddview)
     return output
 
 
-def read_schematic_tool(lib: str, cell: str) -> str:
-    """Read the schematic of a cell and return its instances, nets, and pins.
+def read_and_analyse_schematic(lib: str, cell: str) -> str:
+    """Read the schematic and identify all circuit topologies in one step.
 
     Args:
         lib: library name
         cell: cell name
     """
-    log.info("read_schematic_tool(lib=%s, cell=%s)", lib, cell)
+    log.info("read_and_analyse_schematic(lib=%s, cell=%s)", lib, cell)
     data = read_schematic(client, lib, cell)
-    compact = {
+    schematic = {
         "instances": [
             {
                 "name": i["name"],
@@ -162,9 +187,19 @@ def read_schematic_tool(lib: str, cell: str) -> str:
         },
         "pins": list(data["pins"].keys()),
     }
-    output = json.dumps(compact, indent=2)
-    log.info("read_schematic_tool → %s", output)
-    return output
+    log.info("read_and_analyse_schematic schematic → %s", json.dumps(schematic, indent=2))
+
+    response = llm.invoke([
+        SystemMessage(content=_TOPOLOGY_SYSTEM_PROMPT),
+        HumanMessage(content=(
+            f"Instances:\n{json.dumps(schematic['instances'], indent=2)}\n\n"
+            f"Nets:\n{json.dumps(schematic['nets'], indent=2)}"
+        )),
+    ])
+    topologies = response.content
+    log.info("read_and_analyse_schematic topologies → %s", topologies)
+
+    return json.dumps({"schematic": schematic, "topologies": topologies}, indent=2)
 
 
 def place_instance(
@@ -206,8 +241,7 @@ let((cv)
 
 
 
-llm = ChatOpenAI(model="gpt-4o")
-tools = [check_layout_exists, delete_layout, read_schematic_tool, place_instance]
+tools = [check_layout_exists, delete_layout, read_and_analyse_schematic, place_instance]
 llm_with_tools = llm.bind_tools(tools)
 
 
@@ -248,9 +282,8 @@ if __name__ == "__main__":
     messages = [HumanMessage(content=(
         "Create a layout for library 'test', cell 'inverter'. "
         "1. Check if the layout exists and delete it if so. "
-        "2. Read the schematic. "
-        "3. Analyse the topology and device types. "
-        "4. Call place_instance for every device using the placement guidelines. "
+        "2. Call read_and_analyse_schematic to get the schematic and circuit topologies. "
+        "3. Call place_instance for every device using the placement guidelines. "
         "Do not stop after the analysis — place every instance before responding."
     ))]
     result = graph.invoke({"messages": messages})
