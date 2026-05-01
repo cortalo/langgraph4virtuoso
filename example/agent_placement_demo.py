@@ -6,6 +6,7 @@ Usage:
 """
 
 import json
+import uuid
 import argparse
 import logging
 from pathlib import Path
@@ -43,6 +44,7 @@ class LayoutState(TypedDict):
     target_lib: str          # layout target library, set at invocation
     target_cell: str         # layout target cell, set at invocation
     placement_errors: list[str]  # accumulated failures; cleared on each successful placement
+    topology_file_path: str  # path to topology JSON; empty string → infer via LLM and write UUID file
 
 
 # ---------------------------------------------------------------------------
@@ -281,15 +283,24 @@ def read_and_analyse_schematic(
     }
     log.info("read_and_analyse_schematic schematic → %s", json.dumps(schematic, indent=2))
 
-    response = llm.invoke([
-        SystemMessage(content=_TOPOLOGY_SYSTEM_PROMPT),
-        HumanMessage(content=(
-            f"Circuit pins: {schematic['pins']}\n\n"
-            f"Instances:\n{json.dumps(schematic['instances'], indent=2)}\n\n"
-            f"Nets:\n{json.dumps(schematic['nets'], indent=2)}"
-        )),
-    ])
-    topologies = response.content
+    topology_file_path = state.get("topology_file_path", "")
+    if topology_file_path:
+        topologies = Path(topology_file_path).read_text(encoding="utf-8").strip()
+        log.info("read_and_analyse_schematic: loaded topologies from %s", topology_file_path)
+    else:
+        response = llm.invoke([
+            SystemMessage(content=_TOPOLOGY_SYSTEM_PROMPT),
+            HumanMessage(content=(
+                f"Circuit pins: {schematic['pins']}\n\n"
+                f"Instances:\n{json.dumps(schematic['instances'], indent=2)}\n\n"
+                f"Nets:\n{json.dumps(schematic['nets'], indent=2)}"
+            )),
+        ])
+        topologies = response.content
+        topology_file_path = str(Path(__file__).parent / f"topology_{uuid.uuid4().hex}.json")
+        Path(topology_file_path).write_text(topologies, encoding="utf-8")
+        log.info("read_and_analyse_schematic: inferred topologies, wrote to %s", topology_file_path)
+
     log.info("read_and_analyse_schematic topologies → %s", topologies)
 
     output = json.dumps({"schematic": schematic, "topologies": topologies}, indent=2)
@@ -297,6 +308,7 @@ def read_and_analyse_schematic(
         "messages": [ToolMessage(content=output, tool_call_id=tool_call_id)],
         "schematic": schematic,
         "topologies": topologies,
+        "topology_file_path": topology_file_path,
         "placement_registry": {},
     })
 
@@ -535,6 +547,8 @@ if __name__ == "__main__":
 
     log.info(_SYSTEM_PROMPT)
     lib, cell = "test", "ota"
+    # Set topology_file_path to a path to skip LLM inference, or "" to infer and auto-save.
+    topology_file_path = "topology_ota.json"
     result = graph.invoke({
         "messages": [_build_pre_placement_message(lib, cell)],
         "placement_registry": {},
@@ -543,7 +557,9 @@ if __name__ == "__main__":
         "target_lib": lib,
         "target_cell": cell,
         "placement_errors": [],
+        "topology_file_path": topology_file_path,
     })
+    print(f"\nTopology file: {result['topology_file_path']}")
     print("\nPlacement complete. Registry:")
     for name, (xnm, ynm) in result["placement_registry"].items():
         print(f"  {name}: ({xnm/1000}, {ynm/1000}) um")
