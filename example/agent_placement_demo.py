@@ -8,8 +8,10 @@ Usage:
 import json
 import argparse
 import logging
+from pathlib import Path
+import yaml
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 
@@ -19,6 +21,74 @@ from virtuoso_bridge.virtuoso.schematic.reader import read_schematic
 log = logging.getLogger(__name__)
 
 client = VirtuosoClient.local(port=65432)
+
+# ---------------------------------------------------------------------------
+# Placement guidelines
+# ---------------------------------------------------------------------------
+
+with open(Path(__file__).parent / "placement_guidelines.yaml") as _f:
+    _RULES = yaml.safe_load(_f)
+
+_NMOS_PATTERNS = _RULES["device_classification"]["nmos"]
+_PMOS_PATTERNS = _RULES["device_classification"]["pmos"]
+
+
+def _infer_device_type(cell: str) -> str:
+    c = cell.lower()
+    if any(p in c for p in _NMOS_PATTERNS):
+        return "NMOS"
+    if any(p in c for p in _PMOS_PATTERNS):
+        return "PMOS"
+    return "unknown"
+
+
+def _build_system_prompt(rules: dict) -> str:
+    spacing = rules["spacing"]
+    lines = [
+        "You are an analog IC layout placement agent.",
+        "",
+        "## Device type identification",
+        f"  NMOS: cell name contains any of {rules['device_classification']['nmos']}",
+        f"  PMOS: cell name contains any of {rules['device_classification']['pmos']}",
+        "",
+        "## Placement guidelines",
+    ]
+    for name, circuit in rules["circuits"].items():
+        lines.append(f"\n### {name.upper()}")
+        lines.append(f"Topology: {circuit['topology'].strip()}")
+        lines.append("Rules:")
+        for rule in circuit["placement"]:
+            # substitute spacing values so the LLM sees concrete numbers
+            rendered = rule.format(**{k.replace("-", "_"): v for k, v in spacing.items()})
+            lines.append(f"  - {rendered}")
+    lines += [
+        "",
+        "## Analysis procedure",
+        "",
+        "Before placing any instance, work through these steps in order:",
+        "",
+        "1. Classify every instance as NMOS, PMOS, or unknown using the `device_type`",
+        "   field in the read_schematic_tool output (cross-check with the cell name).",
+        "",
+        "2. Identify key shared nets by examining which instance terminals connect to each net:",
+        "   - Shared gate net between a PMOS and an NMOS → they form a complementary pair",
+        "     with a common input signal.",
+        "   - Shared drain net between a PMOS and an NMOS → they share a common output node.",
+        "   - A net connected only to a PMOS source (no other active device) → VDD supply rail.",
+        "   - A net connected only to an NMOS source (no other active device) → VSS / GND rail.",
+        "",
+        "3. Match the observed connection pattern to one of the known circuit topologies",
+        "   described above (e.g. inverter). Name the circuit explicitly before proceeding.",
+        "",
+        "4. Apply the placement rules for the matched topology.",
+        "   Do not use arbitrary coordinates — every coordinate must follow from the rules.",
+        "   Call place_instance for EVERY device before giving any final response.",
+        "   Do not describe what you are going to do — just call the tools.",
+    ]
+    return "\n".join(lines)
+
+
+_SYSTEM_PROMPT = _build_system_prompt(_RULES)
 
 
 def check_layout_exists(lib: str, cell: str) -> str:
@@ -78,7 +148,12 @@ def read_schematic_tool(lib: str, cell: str) -> str:
     data = read_schematic(client, lib, cell)
     compact = {
         "instances": [
-            {"name": i["name"], "lib": i["lib"], "cell": i["cell"]}
+            {
+                "name": i["name"],
+                "lib": i["lib"],
+                "cell": i["cell"],
+                "device_type": _infer_device_type(i["cell"]),
+            }
             for i in data["instances"]
         ],
         "nets": {
@@ -137,7 +212,7 @@ llm_with_tools = llm.bind_tools(tools)
 
 
 def tool_calling_llm(state: MessagesState):
-    response = llm_with_tools.invoke(state["messages"])
+    response = llm_with_tools.invoke([SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"])
     if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
             log.info("[LLM] tool call: %s(%s)", tc["name"], tc["args"])
@@ -169,10 +244,14 @@ if __name__ == "__main__":
         for noisy in ("httpx", "openai", "httpcore", "virtuoso_bridge"):
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    log.info(_SYSTEM_PROMPT)
     messages = [HumanMessage(content=(
         "Create a layout for library 'test', cell 'inverter'. "
-        "First check if the layout already exists and delete it if so. "
-        "Then read the schematic and place each instance at a reasonable position."
+        "1. Check if the layout exists and delete it if so. "
+        "2. Read the schematic. "
+        "3. Analyse the topology and device types. "
+        "4. Call place_instance for every device using the placement guidelines. "
+        "Do not stop after the analysis — place every instance before responding."
     ))]
     result = graph.invoke({"messages": messages})
     result["messages"][-1].pretty_print()

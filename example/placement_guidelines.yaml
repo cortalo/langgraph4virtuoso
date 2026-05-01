@@ -1,0 +1,19 @@
+# Analog layout placement guidelines
+# Units: micrometers (um)
+
+device_classification:
+  nmos: ["nfet"]   # cell name substrings identifying NMOS devices
+  pmos: ["pfet"]   # cell name substrings identifying PMOS devices
+
+spacing:
+  pmos_nmos: 1.0   # vertical gap between PMOS row and NMOS row (um)
+
+circuits:
+  inverter:
+    topology: >
+      One PMOS + one NMOS whose gates are tied (input net), drains are tied (output net),
+      PMOS source at VDD, NMOS source at GND/VSS.
+    placement:
+      - Place NMOS at y = 0.
+      - Place PMOS at y = pmos_nmos spacing (1.0 um above NMOS).
+      - Align both devices at the same x coordinate (x = 0).
