@@ -467,17 +467,53 @@ def placement_llm(state: LayoutState):
 
 
 # ---------------------------------------------------------------------------
+# Human-in-the-loop topology review (inserted between pre-placement and placement)
+# ---------------------------------------------------------------------------
+
+def human_feedback(state: LayoutState) -> dict:
+    """Pause for human topology review; loops until user approves with empty input."""
+    topologies = state["topologies"]
+    schematic = state["schematic"]
+    while True:
+        print("\n" + "=" * 60)
+        print("TOPOLOGY REVIEW — approve or correct")
+        print("=" * 60)
+        print(topologies)
+        print("=" * 60)
+        feedback = input("Press Enter to approve, or type correction: ").strip()
+        if not feedback:
+            break
+        response = llm.invoke([
+            SystemMessage(content=_TOPOLOGY_SYSTEM_PROMPT),
+            HumanMessage(content=(
+                f"Current topology analysis:\n{topologies}\n\n"
+                f"User correction: {feedback}\n\n"
+                f"Circuit pins: {schematic['pins']}\n"
+                f"Instances:\n{json.dumps(schematic['instances'], indent=2)}\n"
+                f"Nets:\n{json.dumps(schematic['nets'], indent=2)}\n\n"
+                "Update the topology analysis incorporating the user's correction. "
+                "Return only the updated JSON array, no markdown fences."
+            )),
+        ])
+        topologies = response.content
+        log.info("human_feedback refined → %s", topologies)
+    return {"topologies": topologies}
+
+
+# ---------------------------------------------------------------------------
 # Graph
 # ---------------------------------------------------------------------------
 
 builder = StateGraph(LayoutState)
 builder.add_node("pre_placement_llm", pre_placement_llm)
 builder.add_node("pre_placement_tools", ToolNode(pre_placement_tools))
+builder.add_node("human_feedback", human_feedback)
 builder.add_node("placement_llm", placement_llm)
 builder.add_node("placement_tools", ToolNode(placement_tools))
 builder.add_edge(START, "pre_placement_llm")
-builder.add_conditional_edges("pre_placement_llm", tools_condition, {"tools": "pre_placement_tools", END: "placement_llm"})
+builder.add_conditional_edges("pre_placement_llm", tools_condition, {"tools": "pre_placement_tools", END: "human_feedback"})
 builder.add_edge("pre_placement_tools", "pre_placement_llm")
+builder.add_edge("human_feedback", "placement_llm")
 builder.add_conditional_edges("placement_llm", tools_condition, {"tools": "placement_tools", END: END})
 builder.add_edge("placement_tools", "placement_llm")
 graph = builder.compile()
