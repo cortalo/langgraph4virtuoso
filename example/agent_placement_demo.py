@@ -381,23 +381,27 @@ def is_placement_complete(
     return f"COMPLETE — all {len(placed)} devices placed: {sorted(placed)}"
 
 
-tools = [check_layout_exists, delete_layout, read_and_analyse_schematic, place_instance, is_placement_complete]
-llm_with_tools = llm.bind_tools(tools, parallel_tool_calls=False)
+pre_placement_tools = [check_layout_exists, delete_layout, read_and_analyse_schematic]
+placement_tools = [place_instance, is_placement_complete]
 
+llm_with_pre_placement_tools = llm.bind_tools(pre_placement_tools, parallel_tool_calls=False)
+llm_with_placement_tools = llm.bind_tools(placement_tools, parallel_tool_calls=False)
+
+
+# ---------------------------------------------------------------------------
+# Message builders
+# ---------------------------------------------------------------------------
 
 def _build_pre_placement_message(lib: str, cell: str) -> HumanMessage:
-    """Task message for the pre-schematic phase: instructs the LLM to read and analyse."""
     return HumanMessage(content=(
         f"Create a layout for library '{lib}', cell '{cell}'. "
         f"1. Check if the layout '{lib}/{cell}' exists and delete it if so. "
-        f"2. Call read_and_analyse_schematic to read the schematic '{lib}/{cell}' "
-        f"   and identify all circuit topologies. "
-        f"Do not start placing devices yet — wait until the schematic is analysed."
+        f"2. Call read_and_analyse_schematic to read the schematic and identify topologies for '{lib}/{cell}'. "
+        f"Do not place any devices, just finish after finish 1 and 2."
     ))
 
 
 def _build_placement_message(state: LayoutState) -> HumanMessage:
-    """Focused placement message built from current state."""
     lib, cell = state["target_lib"], state["target_cell"]
     placed = {k: (v[0] / 1000, v[1] / 1000) for k, v in state["placement_registry"].items()}
     all_devices = {i["name"] for i in state["schematic"].get("instances", [])}
@@ -421,32 +425,49 @@ def _last_round(messages: list) -> list:
     return []
 
 
-def tool_calling_llm(state: LayoutState):
-    if state["schematic"]:
-        # Placement phase: focused placement message + last AI/Tool round for immediate feedback
-        messages = (
-            [SystemMessage(content=_SYSTEM_PROMPT), _build_placement_message(state)]
-            + _last_round(state["messages"])
-        )
-    else:
-        # Pre-schematic phase: full history so LLM can see prior tool results
-        messages = [SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"]
+# ---------------------------------------------------------------------------
+# Graph nodes
+# ---------------------------------------------------------------------------
 
-    response = llm_with_tools.invoke(messages)
+def pre_placement_llm(state: LayoutState):
+    messages = [SystemMessage(content=_SYSTEM_PROMPT)] + state["messages"]
+    response = llm_with_pre_placement_tools.invoke(messages)
     if isinstance(response, AIMessage) and response.tool_calls:
         for tc in response.tool_calls:
-            log.info("[LLM] tool call: %s(%s)", tc["name"], tc["args"])
+            log.info("[pre_placement_llm] tool call: %s(%s)", tc["name"], tc["args"])
     else:
-        log.info("[LLM] final response")
+        log.info("[pre_placement_llm] final response")
     return {"messages": [response]}
 
 
+def placement_llm(state: LayoutState):
+    messages = (
+        [SystemMessage(content=_SYSTEM_PROMPT), _build_placement_message(state)]
+        + _last_round(state["messages"])
+    )
+    response = llm_with_placement_tools.invoke(messages)
+    if isinstance(response, AIMessage) and response.tool_calls:
+        for tc in response.tool_calls:
+            log.info("[placement_llm] tool call: %s(%s)", tc["name"], tc["args"])
+    else:
+        log.info("[placement_llm] final response")
+    return {"messages": [response]}
+
+
+# ---------------------------------------------------------------------------
+# Graph
+# ---------------------------------------------------------------------------
+
 builder = StateGraph(LayoutState)
-builder.add_node("tool_calling_llm", tool_calling_llm)
-builder.add_node("tools", ToolNode(tools))
-builder.add_edge(START, "tool_calling_llm")
-builder.add_conditional_edges("tool_calling_llm", tools_condition)
-builder.add_edge("tools", "tool_calling_llm")
+builder.add_node("pre_placement_llm", pre_placement_llm)
+builder.add_node("pre_placement_tools", ToolNode(pre_placement_tools))
+builder.add_node("placement_llm", placement_llm)
+builder.add_node("placement_tools", ToolNode(placement_tools))
+builder.add_edge(START, "pre_placement_llm")
+builder.add_conditional_edges("pre_placement_llm", tools_condition, {"tools": "pre_placement_tools", END: "placement_llm"})
+builder.add_edge("pre_placement_tools", "pre_placement_llm")
+builder.add_conditional_edges("placement_llm", tools_condition, {"tools": "placement_tools", END: END})
+builder.add_edge("placement_tools", "placement_llm")
 graph = builder.compile()
 
 
@@ -465,7 +486,6 @@ if __name__ == "__main__":
             logging.getLogger(noisy).setLevel(logging.WARNING)
 
     log.info(_SYSTEM_PROMPT)
-    # specify target lib and cell here
     lib, cell = "test", "ota"
     result = graph.invoke({
         "messages": [_build_pre_placement_message(lib, cell)],
@@ -475,4 +495,6 @@ if __name__ == "__main__":
         "target_lib": lib,
         "target_cell": cell,
     })
-    result["messages"][-1].pretty_print()
+    print("\nPlacement complete. Registry:")
+    for name, (xnm, ynm) in result["placement_registry"].items():
+        print(f"  {name}: ({xnm/1000}, {ynm/1000}) um")
