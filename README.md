@@ -3,12 +3,31 @@
 LangGraph agents that execute SKILL in a running Virtuoso session,
 built on top of [virtuoso-bridge-lite](https://github.com/Arcadia-1/virtuoso-bridge-lite).
 
+## Clone
+
+This repo uses `virtuoso-bridge-lite` as a git submodule (pinned to commit `eacf3ca`).
+
+Clone with submodules in one step:
+
+```bash
+git clone --recurse-submodules https://github.com/Cortalo/langgraph4virtuoso.git
+```
+
+If you already cloned without `--recurse-submodules`, initialize the submodule afterwards:
+
+```bash
+git submodule update --init
+cd virtuoso-bridge-lite
+git checkout eacf3ca
+cd ..
+```
+
 ## Environment Variables
 
 Set these in your shell (e.g. `~/.bashrc`) before starting Virtuoso:
 
 ```bash
-export RB_DAEMON_PATH=/path/to/virtuoso-bridge-lite/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge_daemon_3.py
+export RB_DAEMON_PATH=/path/to/langgraph4virtuoso/virtuoso-bridge-lite/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge_daemon_3.py
 export RB_PYTHON_PATH=python3
 export RB_PORT=65432
 export OPENAI_API_KEY=your_key_here
@@ -28,7 +47,7 @@ Create a virtual environment and install dependencies:
 python3 -m venv langgraph-env
 source langgraph-env/bin/activate
 pip install -r requirements.txt
-pip install -e /path/to/virtuoso-bridge-lite
+pip install -e virtuoso-bridge-lite
 ```
 
 ## Start the Virtuoso Daemon
@@ -41,7 +60,7 @@ pip install -e /path/to/virtuoso-bridge-lite
 
 2. In the Virtuoso CIW, load the bridge:
    ```
-   load("/path/to/virtuoso-bridge-lite/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il")
+   load("/abs/path/to/langgraph4virtuoso/virtuoso-bridge-lite/src/virtuoso_bridge/virtuoso/basic/resources/ramic_bridge.il")
    ```
    You should see:
    ```
