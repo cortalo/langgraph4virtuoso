@@ -1,0 +1,10 @@
+{
+  "dependencies": [
+    ".",
+    "./virtuoso-bridge-lite"
+  ],
+  "graphs": {
+    "placement_exp": "./example/agent_placement_exp.py:graph"
+  },
+  "env": ".env"
+}
