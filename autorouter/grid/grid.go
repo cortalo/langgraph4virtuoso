@@ -1,6 +1,9 @@
 package grid
 
 import "errors"
+import "autorouter/common"
+
+type Point = common.Point
 
 var ErrOutOfBounds = errors.New("point out of bounds")
 
@@ -12,11 +15,6 @@ const (
 	CellBlocked            // 障碍物
 	CellOccupied           // 被某条线占用
 )
-
-// Point 表示网格上的一个坐标
-type Point struct {
-	X, Y int
-}
 
 // Cell 表示网格上的一个格子
 type Cell struct {
