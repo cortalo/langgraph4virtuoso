@@ -142,17 +142,42 @@ func (g *Grid) NeighborsIgnoreOccupied(p Point, netID, halfWidth int) []Point {
 
 func (g *Grid) neighbors(p Point, netID, halfWidth int, ignoreOccupied bool) []Point {
 	dirs := []Point{
-		{p.X, p.Y - 1}, // 上
-		{p.X, p.Y + 1}, // 下
-		{p.X - 1, p.Y}, // 左
-		{p.X + 1, p.Y}, // 右
+		{X: -1, Y: 0}, // up
+		{X: 1, Y: 0},  // down
+		{X: 0, Y: -1}, // left
+		{X: 0, Y: 1},  // right
 	}
 
 	neighbors := make([]Point, 0, 4)
-	for _, candidate := range dirs {
-		if g.isPassable(candidate, netID, halfWidth, ignoreOccupied) {
+	for _, dir := range dirs {
+		candidate := Point{X: p.X + dir.X, Y: p.Y + dir.Y}
+		if g.isNewStripPassable(candidate, netID, halfWidth, dir, ignoreOccupied) {
 			neighbors = append(neighbors, candidate)
 		}
 	}
 	return neighbors
+}
+
+func (g *Grid) isNewStripPassable(p Point, netID, halfWidth int, dir Point, ignoreOccupied bool) bool {
+	if halfWidth == 0 {
+		return g.isPassable(p, netID, halfWidth, ignoreOccupied)
+	}
+	if dir.X != 0 {
+		// moving vertically
+		stripX := p.X + dir.X*halfWidth
+		for dy := -halfWidth; dy <= halfWidth; dy++ {
+			if !g.isPassable(Point{X: stripX, Y: p.Y + dy}, netID, 0, ignoreOccupied) {
+				return false
+			}
+		}
+	} else {
+		// moving horizontally
+		stripY := p.Y + dir.Y*halfWidth
+		for dx := -halfWidth; dx <= halfWidth; dx++ {
+			if !g.isPassable(Point{X: p.X + dx, Y: stripY}, netID, 0, ignoreOccupied) {
+				return false
+			}
+		}
+	}
+	return true
 }
