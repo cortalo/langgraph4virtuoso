@@ -137,7 +137,7 @@ func TestRoute_MazeWithObstacles(t *testing.T) {
 	// (0,2)→(0,3)→(0,4)→(1,4)→(2,4)→(3,4)→(4,4)→(5,4)→(6,4)→(6,3)→(6,2) = wrong, let me recalc
 	// actually: down to y=4, across, back up = 2+6+2 = 10 moves, length 11
 
-	g := grid.New(7, 5)
+	g := grid.New(5, 7)
 	from := grid.Point{X: 0, Y: 2}
 	to := grid.Point{X: 6, Y: 2}
 

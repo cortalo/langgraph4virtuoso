@@ -4,3 +4,5 @@ package common
 type Point struct {
 	X, Y int
 }
+
+type Path []Point

@@ -6,6 +6,9 @@ import "autorouter/common"
 type Point = common.Point
 
 var ErrOutOfBounds = errors.New("point out of bounds")
+var ErrClearOccupiedNotOccupied = errors.New("clear occupied not occupied")
+var ErrNetIDMismatch = errors.New("net id mismatch")
+var ErrCellNotOccupied = errors.New("cell not occupied by net")
 
 // CellState 表示一个格子的状态
 type CellState int
@@ -31,9 +34,9 @@ type Grid struct {
 
 // New 创建一个指定宽高的空网格
 func New(width, height int) *Grid {
-	cells := make([][]Cell, width)
+	cells := make([][]Cell, height)
 	for x := range cells {
-		cells[x] = make([]Cell, height)
+		cells[x] = make([]Cell, width)
 	}
 	return &Grid{
 		Width:  width,
@@ -44,7 +47,7 @@ func New(width, height int) *Grid {
 
 // InBounds 判断一个点是否在网格范围内
 func (g *Grid) InBounds(p Point) bool {
-	return p.X >= 0 && p.Y >= 0 && p.X < g.Width && p.Y < g.Height
+	return p.X >= 0 && p.Y >= 0 && p.X < g.Height && p.Y < g.Width
 }
 
 // SetBlocked 将某个点标记为障碍物
@@ -64,6 +67,16 @@ func (g *Grid) GetCell(p Point) (Cell, error) {
 	return g.cells[p.X][p.Y], nil
 }
 
+func (g *Grid) GetNetID(p Point) (int, error) {
+	if !g.InBounds(p) {
+		return 0, ErrOutOfBounds
+	}
+	if g.cells[p.X][p.Y].State != CellOccupied {
+		return 0, ErrCellNotOccupied
+	}
+	return g.cells[p.X][p.Y].NetID, nil
+}
+
 // SetOccupied 将某个点标记为被 netID 占用
 func (g *Grid) SetOccupied(p Point, netID int) error {
 	if !g.InBounds(p) {
@@ -74,17 +87,49 @@ func (g *Grid) SetOccupied(p Point, netID int) error {
 	return nil
 }
 
-// IsPassable 判断某个点是否可以通行（空或已被同一 netID 占用）
+func (g *Grid) ClearOccupied(p Point, netID int) error {
+	if !g.InBounds(p) {
+		return ErrOutOfBounds
+	}
+	if g.cells[p.X][p.Y].State != CellOccupied {
+		return ErrClearOccupiedNotOccupied
+	}
+	if g.cells[p.X][p.Y].NetID != netID {
+		return ErrNetIDMismatch
+	}
+	g.cells[p.X][p.Y].State = CellEmpty
+	g.cells[p.X][p.Y].NetID = 0
+	return nil
+}
+
 func (g *Grid) IsPassable(p Point, netID int) bool {
+	return g.isPassable(p, netID, false)
+}
+
+func (g *Grid) IsPassableIgnoreOccupied(p Point, netID int) bool {
+	return g.isPassable(p, netID, true)
+}
+
+func (g *Grid) isPassable(p Point, netID int, ignoreOccupied bool) bool {
 	cell, err := g.GetCell(p)
 	if err != nil {
 		return false
 	}
+	if ignoreOccupied {
+		return cell.State != CellBlocked
+	}
 	return cell.State == CellEmpty || cell.NetID == netID
 }
 
-// Neighbors 返回某个点上下左右四个方向中可通行的邻居
 func (g *Grid) Neighbors(p Point, netID int) []Point {
+	return g.neighbors(p, netID, false)
+}
+
+func (g *Grid) NeighborsIgnoreOccupied(p Point, netID int) []Point {
+	return g.neighbors(p, netID, true)
+}
+
+func (g *Grid) neighbors(p Point, netID int, ignoreOccupied bool) []Point {
 	dirs := []Point{
 		{p.X, p.Y - 1}, // 上
 		{p.X, p.Y + 1}, // 下
@@ -94,7 +139,7 @@ func (g *Grid) Neighbors(p Point, netID int) []Point {
 
 	neighbors := make([]Point, 0, 4)
 	for _, candidate := range dirs {
-		if g.IsPassable(candidate, netID) {
+		if g.isPassable(candidate, netID, ignoreOccupied) {
 			neighbors = append(neighbors, candidate)
 		}
 	}
