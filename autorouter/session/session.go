@@ -67,7 +67,10 @@ func (s *Session) Route() []NetResult {
 
 	for iteration := 0; iteration < maxIterations && len(pending) > 0; iteration++ {
 		for len(pending) > 0 {
-			net, _ := lo.First(lo.Values(pending))
+			net, ok := s.nextPending(pending)
+			if !ok {
+				panic("there should be nets remaining in the pending")
+			}
 			path, err := s.router.Route(net.From, net.To, net.ID, 0)
 			if err == nil {
 				// success: mark grid and record result
@@ -145,4 +148,13 @@ func (s *Session) orderedResults(results map[int]NetResult) []NetResult {
 		ordered[i] = results[net.ID]
 	}
 	return ordered
+}
+
+func (s *Session) nextPending(pending map[int]Net) (Net, bool) {
+	for _, net := range s.nets {
+		if _, ok := pending[net.ID]; ok {
+			return net, true
+		}
+	}
+	return Net{}, false
 }
