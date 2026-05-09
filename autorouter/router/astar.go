@@ -29,12 +29,12 @@ func NewAStarRouter(g Grid) *AStarRouter {
 	return &AStarRouter{grid: g}
 }
 
-func (r *AStarRouter) Route(from, to Point, netID int) (Path, error) {
-	return r.route(from, to, netID, false)
+func (r *AStarRouter) Route(from, to Point, netID int, halfWidth int) (Path, error) {
+	return r.route(from, to, netID, halfWidth, false)
 }
 
-func (r *AStarRouter) RouteIgnoreOccupied(from, to Point, netID int) (Path, error) {
-	return r.route(from, to, netID, true)
+func (r *AStarRouter) RouteIgnoreOccupied(from, to Point, netID int, halfWidth int) (Path, error) {
+	return r.route(from, to, netID, halfWidth, true)
 }
 
 func reconstructPath(n *node) Path {
@@ -49,11 +49,11 @@ func reconstructPath(n *node) Path {
 	return path
 }
 
-func (r *AStarRouter) route(from, to Point, netID int, ignoreOccupied bool) (Path, error) {
+func (r *AStarRouter) route(from, to Point, netID, halfWidth int, ignoreOccupied bool) (Path, error) {
 	if from == to {
 		return Path{from}, nil
 	}
-	if !r.grid.IsPassable(from, netID) || !r.grid.IsPassable(to, netID) {
+	if !r.grid.IsPassable(from, netID, halfWidth) || !r.grid.IsPassable(to, netID, halfWidth) {
 		return nil, ErrNoPath
 	}
 
@@ -79,9 +79,9 @@ func (r *AStarRouter) route(from, to Point, netID int, ignoreOccupied bool) (Pat
 
 		var neighbors []Point
 		if ignoreOccupied {
-			neighbors = r.grid.NeighborsIgnoreOccupied(current.point, netID)
+			neighbors = r.grid.NeighborsIgnoreOccupied(current.point, netID, halfWidth)
 		} else {
-			neighbors = r.grid.Neighbors(current.point, netID)
+			neighbors = r.grid.Neighbors(current.point, netID, halfWidth)
 		}
 		for _, neighbor := range neighbors {
 			if closed[neighbor] {

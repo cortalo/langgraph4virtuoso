@@ -34,8 +34,8 @@ type Grid interface {
 
 // Router defines what the session needs from a router
 type Router interface {
-	Route(from, to Point, netID int) (Path, error)
-	RouteIgnoreOccupied(from, to Point, netID int) (Path, error)
+	Route(from, to Point, netID, halfWidth int) (Path, error)
+	RouteIgnoreOccupied(from, to Point, netID, halfWidth int) (Path, error)
 }
 
 // Session holds a grid and a set of nets to route
@@ -68,7 +68,7 @@ func (s *Session) Route() []NetResult {
 	for iteration := 0; iteration < maxIterations && len(pending) > 0; iteration++ {
 		for len(pending) > 0 {
 			net, _ := lo.First(lo.Values(pending))
-			path, err := s.router.Route(net.From, net.To, net.ID)
+			path, err := s.router.Route(net.From, net.To, net.ID, 0)
 			if err == nil {
 				// success: mark grid and record result
 				lo.ForEach(path, func(p Point, _ int) {
@@ -100,7 +100,7 @@ func (s *Session) Route() []NetResult {
 					delete(routed, blockingID)
 				}
 			}
-			path, err = s.router.Route(net.From, net.To, net.ID)
+			path, err = s.router.Route(net.From, net.To, net.ID, 0)
 			if err != nil {
 				results[net.ID] = NetResult{Net: net, Path: nil, Err: err}
 			} else {
@@ -125,7 +125,7 @@ func (s *Session) Route() []NetResult {
 }
 
 func (s *Session) findBlockingNets(net Net) []int {
-	path, err := s.router.RouteIgnoreOccupied(net.From, net.To, net.ID)
+	path, err := s.router.RouteIgnoreOccupied(net.From, net.To, net.ID, 0)
 	if err != nil {
 		return nil
 	}

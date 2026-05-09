@@ -98,52 +98,52 @@ func TestSetOccupied_OutOfBounds_ReturnsError(t *testing.T) {
 
 func TestIsPassable_EmptyCell_IsPassable(t *testing.T) {
 	g := grid.New(5, 5)
-	assert.True(t, g.IsPassable(grid.Point{X: 2, Y: 2}, 1))
+	assert.True(t, g.IsPassable(grid.Point{X: 2, Y: 2}, 1, 0))
 }
 
 func TestIsPassable_BlockedCell_NotPassable(t *testing.T) {
 	g := grid.New(5, 5)
 	p := grid.Point{X: 2, Y: 2}
 	require.NoError(t, g.SetBlocked(p))
-	assert.False(t, g.IsPassable(p, 1))
+	assert.False(t, g.IsPassable(p, 1, 0))
 }
 
 func TestIsPassable_OccupiedBySameNet_IsPassable(t *testing.T) {
 	g := grid.New(5, 5)
 	p := grid.Point{X: 2, Y: 2}
 	require.NoError(t, g.SetOccupied(p, 7))
-	assert.True(t, g.IsPassable(p, 7))
+	assert.True(t, g.IsPassable(p, 7, 0))
 }
 
 func TestIsPassable_OccupiedByDifferentNet_NotPassable(t *testing.T) {
 	g := grid.New(5, 5)
 	p := grid.Point{X: 2, Y: 2}
 	require.NoError(t, g.SetOccupied(p, 7))
-	assert.False(t, g.IsPassable(p, 99))
+	assert.False(t, g.IsPassable(p, 99, 0))
 }
 
 func TestIsPassable_OutOfBounds_NotPassable(t *testing.T) {
 	g := grid.New(5, 5)
-	assert.False(t, g.IsPassable(grid.Point{X: -1, Y: 0}, 1))
+	assert.False(t, g.IsPassable(grid.Point{X: -1, Y: 0}, 1, 0))
 }
 
 // --- Neighbors ---
 
 func TestNeighbors_CenterCell_HasFourNeighbors(t *testing.T) {
 	g := grid.New(5, 5)
-	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1)
+	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1, 0)
 	assert.Len(t, neighbors, 4)
 }
 
 func TestNeighbors_CornerCell_HasTwoNeighbors(t *testing.T) {
 	g := grid.New(5, 5)
-	neighbors := g.Neighbors(grid.Point{X: 0, Y: 0}, 1)
+	neighbors := g.Neighbors(grid.Point{X: 0, Y: 0}, 1, 0)
 	assert.Len(t, neighbors, 2)
 }
 
 func TestNeighbors_EdgeCell_HasThreeNeighbors(t *testing.T) {
 	g := grid.New(5, 5)
-	neighbors := g.Neighbors(grid.Point{X: 0, Y: 2}, 1)
+	neighbors := g.Neighbors(grid.Point{X: 0, Y: 2}, 1, 0)
 	assert.Len(t, neighbors, 3)
 }
 
@@ -151,7 +151,7 @@ func TestNeighbors_BlockedNeighbor_Excluded(t *testing.T) {
 	g := grid.New(5, 5)
 	require.NoError(t, g.SetBlocked(grid.Point{X: 3, Y: 2}))
 
-	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1)
+	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1, 0)
 
 	assert.Len(t, neighbors, 3)
 	assert.NotContains(t, neighbors, grid.Point{X: 3, Y: 2})

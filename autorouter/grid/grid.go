@@ -102,34 +102,45 @@ func (g *Grid) ClearOccupied(p Point, netID int) error {
 	return nil
 }
 
-func (g *Grid) IsPassable(p Point, netID int) bool {
-	return g.isPassable(p, netID, false)
+func (g *Grid) IsPassable(p Point, netID, halfWidth int) bool {
+	return g.isPassable(p, netID, halfWidth, false)
 }
 
-func (g *Grid) IsPassableIgnoreOccupied(p Point, netID int) bool {
-	return g.isPassable(p, netID, true)
+func (g *Grid) IsPassableIgnoreOccupied(p Point, netID, halfWidth int) bool {
+	return g.isPassable(p, netID, halfWidth, true)
 }
 
-func (g *Grid) isPassable(p Point, netID int, ignoreOccupied bool) bool {
-	cell, err := g.GetCell(p)
-	if err != nil {
-		return false
+func (g *Grid) isPassable(p Point, netID, halfWidth int, ignoreOccupied bool) bool {
+	for dx := -halfWidth; dx <= halfWidth; dx++ {
+		for dy := -halfWidth; dy <= halfWidth; dy++ {
+			neighbor := Point{X: p.X + dx, Y: p.Y + dy}
+			cell, err := g.GetCell(neighbor)
+			if err != nil {
+				// out of bounds
+				return false
+			}
+			if cell.State == CellBlocked {
+				return false
+			}
+			if !ignoreOccupied {
+				if cell.State != CellEmpty && cell.NetID != netID {
+					return false
+				}
+			}
+		}
 	}
-	if ignoreOccupied {
-		return cell.State != CellBlocked
-	}
-	return cell.State == CellEmpty || cell.NetID == netID
+	return true
 }
 
-func (g *Grid) Neighbors(p Point, netID int) []Point {
-	return g.neighbors(p, netID, false)
+func (g *Grid) Neighbors(p Point, netID, halfWidth int) []Point {
+	return g.neighbors(p, netID, halfWidth, false)
 }
 
-func (g *Grid) NeighborsIgnoreOccupied(p Point, netID int) []Point {
-	return g.neighbors(p, netID, true)
+func (g *Grid) NeighborsIgnoreOccupied(p Point, netID, halfWidth int) []Point {
+	return g.neighbors(p, netID, halfWidth, true)
 }
 
-func (g *Grid) neighbors(p Point, netID int, ignoreOccupied bool) []Point {
+func (g *Grid) neighbors(p Point, netID, halfWidth int, ignoreOccupied bool) []Point {
 	dirs := []Point{
 		{p.X, p.Y - 1}, // 上
 		{p.X, p.Y + 1}, // 下
@@ -139,7 +150,7 @@ func (g *Grid) neighbors(p Point, netID int, ignoreOccupied bool) []Point {
 
 	neighbors := make([]Point, 0, 4)
 	for _, candidate := range dirs {
-		if g.isPassable(candidate, netID, ignoreOccupied) {
+		if g.isPassable(candidate, netID, halfWidth, ignoreOccupied) {
 			neighbors = append(neighbors, candidate)
 		}
 	}
