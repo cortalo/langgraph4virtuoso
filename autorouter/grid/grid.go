@@ -6,10 +6,12 @@ import "autorouter/common"
 type Point = common.Point
 
 var ErrOutOfBounds = errors.New("point out of bounds")
-var ErrClearOccupiedNotOccupied = errors.New("clear occupied not occupied")
 var ErrNetIDMismatch = errors.New("net id mismatch")
 var ErrCellNotOccupied = errors.New("cell not occupied by net")
-var ErrCellNotEmpty = errors.New("cell is not empty")
+var ErrCellEmpty = errors.New("cell is empty")
+var ErrCellBlocked = errors.New("cell is blocked")
+var ErrCellOccupied = errors.New("cell is occupied")
+var ErrCellFixed = errors.New("cell is fixed")
 
 // CellState 表示一个格子的状态
 type CellState int
@@ -18,6 +20,7 @@ const (
 	CellEmpty    CellState = iota
 	CellBlocked            // 障碍物
 	CellOccupied           // 被某条线占用
+	CellFixed              // pre-existing metal, cannot be ripped
 )
 
 // Cell 表示网格上的一个格子
@@ -78,13 +81,39 @@ func (g *Grid) GetNetID(p Point) (int, error) {
 	return g.cells[p.X][p.Y].NetID, nil
 }
 
-// SetOccupied 将某个点标记为被 netID 占用
+func (g *Grid) SetFixed(p Point, netID int) error {
+	if !g.InBounds(p) {
+		return ErrOutOfBounds
+	}
+	if g.cells[p.X][p.Y].State == CellBlocked {
+		return ErrCellBlocked
+	}
+	if g.cells[p.X][p.Y].State == CellOccupied {
+		return ErrCellOccupied
+	}
+	if g.cells[p.X][p.Y].State == CellFixed {
+		return ErrCellFixed
+	}
+	g.cells[p.X][p.Y].State = CellFixed
+	g.cells[p.X][p.Y].NetID = netID
+	return nil
+}
+
 func (g *Grid) SetOccupied(p Point, netID int) error {
 	if !g.InBounds(p) {
 		return ErrOutOfBounds
 	}
-	if g.cells[p.X][p.Y].State != CellEmpty {
-		return ErrCellNotEmpty
+	if g.cells[p.X][p.Y].State == CellBlocked {
+		return ErrCellBlocked
+	}
+	if g.cells[p.X][p.Y].State == CellOccupied {
+		return ErrCellOccupied
+	}
+	if g.cells[p.X][p.Y].State == CellFixed {
+		if g.cells[p.X][p.Y].NetID != netID {
+			return ErrNetIDMismatch
+		}
+		return nil
 	}
 	g.cells[p.X][p.Y].State = CellOccupied
 	g.cells[p.X][p.Y].NetID = netID
@@ -95,11 +124,17 @@ func (g *Grid) ClearOccupied(p Point, netID int) error {
 	if !g.InBounds(p) {
 		return ErrOutOfBounds
 	}
-	if g.cells[p.X][p.Y].State != CellOccupied {
-		return ErrClearOccupiedNotOccupied
+	if g.cells[p.X][p.Y].State == CellEmpty {
+		return ErrCellEmpty
+	}
+	if g.cells[p.X][p.Y].State == CellBlocked {
+		return ErrCellBlocked
 	}
 	if g.cells[p.X][p.Y].NetID != netID {
 		return ErrNetIDMismatch
+	}
+	if g.cells[p.X][p.Y].State == CellFixed {
+		return nil
 	}
 	g.cells[p.X][p.Y].State = CellEmpty
 	g.cells[p.X][p.Y].NetID = 0

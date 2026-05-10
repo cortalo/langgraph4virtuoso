@@ -156,3 +156,128 @@ func TestNeighbors_BlockedNeighbor_Excluded(t *testing.T) {
 	assert.Len(t, neighbors, 3)
 	assert.NotContains(t, neighbors, grid.Point{X: 3, Y: 2})
 }
+
+// --- SetFixed ---
+
+func TestSetFixed_CellBecomesFixed(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+
+	require.NoError(t, g.SetFixed(p, 1))
+
+	cell, err := g.GetCell(p)
+	require.NoError(t, err)
+	assert.Equal(t, grid.CellFixed, cell.State)
+	assert.Equal(t, 1, cell.NetID)
+}
+
+func TestSetFixed_OutOfBounds_ReturnsError(t *testing.T) {
+	g := grid.New(5, 5)
+	err := g.SetFixed(grid.Point{X: 10, Y: 0}, 1)
+	assert.ErrorIs(t, err, grid.ErrOutOfBounds)
+}
+
+func TestSetFixed_OnBlockedCell_ReturnsError(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetBlocked(p))
+
+	err := g.SetFixed(p, 1)
+	assert.ErrorIs(t, err, grid.ErrCellBlocked)
+}
+
+func TestSetFixed_OnOccupiedCell_ReturnsError(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetOccupied(p, 1))
+
+	err := g.SetFixed(p, 1)
+	assert.ErrorIs(t, err, grid.ErrCellOccupied)
+}
+
+func TestSetFixed_OnAlreadyFixed_ReturnsError(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	err := g.SetFixed(p, 1)
+	assert.ErrorIs(t, err, grid.ErrCellFixed)
+}
+
+// --- SetOccupied on fixed cell ---
+
+func TestSetOccupied_OnFixedCellSameNet_ReturnsNil(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	err := g.SetOccupied(p, 1)
+	assert.NoError(t, err)
+
+	// cell should still be fixed, not occupied
+	cell, err := g.GetCell(p)
+	require.NoError(t, err)
+	assert.Equal(t, grid.CellFixed, cell.State)
+}
+
+func TestSetOccupied_OnFixedCellDifferentNet_ReturnsError(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	err := g.SetOccupied(p, 2)
+	assert.ErrorIs(t, err, grid.ErrNetIDMismatch)
+}
+
+// --- ClearOccupied on fixed cell ---
+
+func TestClearOccupied_OnFixedCell_ReturnsNilWithoutClearing(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	err := g.ClearOccupied(p, 1)
+	assert.NoError(t, err)
+
+	// cell should still be fixed
+	cell, err := g.GetCell(p)
+	require.NoError(t, err)
+	assert.Equal(t, grid.CellFixed, cell.State)
+	assert.Equal(t, 1, cell.NetID)
+}
+
+// --- IsPassable with fixed cells ---
+
+func TestIsPassable_FixedCellSameNet_IsPassable(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	assert.True(t, g.IsPassable(p, 1, 0))
+}
+
+func TestIsPassable_FixedCellDifferentNet_NotPassable(t *testing.T) {
+	g := grid.New(5, 5)
+	p := grid.Point{X: 2, Y: 2}
+	require.NoError(t, g.SetFixed(p, 1))
+
+	assert.False(t, g.IsPassable(p, 2, 0))
+}
+
+// --- Neighbors with fixed cells ---
+
+func TestNeighbors_FixedCellSameNet_Included(t *testing.T) {
+	g := grid.New(5, 5)
+	require.NoError(t, g.SetFixed(grid.Point{X: 3, Y: 2}, 1))
+
+	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1, 0)
+	assert.Contains(t, neighbors, grid.Point{X: 3, Y: 2})
+}
+
+func TestNeighbors_FixedCellDifferentNet_Excluded(t *testing.T) {
+	g := grid.New(5, 5)
+	require.NoError(t, g.SetFixed(grid.Point{X: 3, Y: 2}, 99))
+
+	neighbors := g.Neighbors(grid.Point{X: 2, Y: 2}, 1, 0)
+	assert.NotContains(t, neighbors, grid.Point{X: 3, Y: 2})
+}
