@@ -1,6 +1,7 @@
 package router_test
 
 import (
+	"autorouter/common"
 	"autorouter/grid"
 	"autorouter/router"
 	"testing"
@@ -8,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type Net = common.Net
 
 func makeGrid(w, h int) *grid.Grid {
 	return grid.New(w, h)
@@ -19,8 +22,9 @@ func TestRoute_SamePoint_ReturnsSinglePointPath(t *testing.T) {
 	g := makeGrid(5, 5)
 	r := router.NewAStarRouter(g)
 	p := grid.Point{X: 2, Y: 2}
+	net := Net{ID: 1, From: p, To: p}
 
-	path, err := r.Route(p, p, 1, 0)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, router.Path{p}, path)
@@ -31,8 +35,9 @@ func TestRoute_AdjacentPoints_ReturnsPathOfTwo(t *testing.T) {
 	r := router.NewAStarRouter(g)
 	from := grid.Point{X: 0, Y: 0}
 	to := grid.Point{X: 1, Y: 0}
+	net := Net{ID: 1, From: from, To: to}
 
-	path, err := r.Route(from, to, 1, 0)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, router.Path{from, to}, path)
@@ -43,8 +48,9 @@ func TestRoute_ClearGrid_ConnectsEndpoints(t *testing.T) {
 	r := router.NewAStarRouter(g)
 	from := grid.Point{X: 0, Y: 0}
 	to := grid.Point{X: 9, Y: 9}
+	net := Net{ID: 1, From: from, To: to}
 
-	path, err := r.Route(from, to, 1, 0)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, from, path[0])
@@ -60,8 +66,9 @@ func TestRoute_ObstacleOnDirectLine_FindsDetour(t *testing.T) {
 	g.SetBlocked(grid.Point{X: 2, Y: 0})
 	g.SetBlocked(grid.Point{X: 3, Y: 0})
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: grid.Point{X: 0, Y: 0}, To: grid.Point{X: 4, Y: 0}}
 
-	path, err := r.Route(grid.Point{X: 0, Y: 0}, grid.Point{X: 4, Y: 0}, 1, 0)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, grid.Point{X: 0, Y: 0}, path[0])
@@ -73,8 +80,9 @@ func TestRoute_StartIsBlocked_ReturnsError(t *testing.T) {
 	from := grid.Point{X: 0, Y: 0}
 	g.SetBlocked(from)
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: from, To: grid.Point{X: 4, Y: 4}}
 
-	_, err := r.Route(from, grid.Point{X: 4, Y: 4}, 1, 0)
+	_, err := r.Route(net)
 
 	assert.ErrorIs(t, err, router.ErrNoPath)
 }
@@ -84,8 +92,9 @@ func TestRoute_EndIsBlocked_ReturnsError(t *testing.T) {
 	to := grid.Point{X: 4, Y: 4}
 	g.SetBlocked(to)
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: grid.Point{X: 0, Y: 0}, To: to}
 
-	_, err := r.Route(grid.Point{X: 0, Y: 0}, to, 1, 0)
+	_, err := r.Route(net)
 
 	assert.ErrorIs(t, err, router.ErrNoPath)
 }
@@ -96,8 +105,9 @@ func TestRoute_NoPathExists_ReturnsError(t *testing.T) {
 	g.SetBlocked(grid.Point{X: 1, Y: 0})
 	g.SetBlocked(grid.Point{X: 0, Y: 1})
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: grid.Point{X: 0, Y: 0}, To: grid.Point{X: 4, Y: 4}}
 
-	_, err := r.Route(grid.Point{X: 0, Y: 0}, grid.Point{X: 4, Y: 4}, 1, 0)
+	_, err := r.Route(net)
 
 	assert.ErrorIs(t, err, router.ErrNoPath)
 }
@@ -110,8 +120,9 @@ func TestRoute_PathIsContiguous(t *testing.T) {
 	g.SetBlocked(grid.Point{X: 5, Y: 1})
 	g.SetBlocked(grid.Point{X: 5, Y: 2})
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: grid.Point{X: 0, Y: 0}, To: grid.Point{X: 9, Y: 0}}
 
-	path, err := r.Route(grid.Point{X: 0, Y: 0}, grid.Point{X: 9, Y: 0}, 1, 0)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	for i := 1; i < len(path); i++ {
@@ -152,7 +163,8 @@ func TestRoute_MazeWithObstacles(t *testing.T) {
 	}
 
 	r := router.NewAStarRouter(g)
-	path, err := r.Route(from, to, 1, 0)
+	net := Net{ID: 1, From: from, To: to}
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 
@@ -187,12 +199,9 @@ func TestRoute_WithLineWidth_ClearPath(t *testing.T) {
 	// routing from (1,1) to (1,8), enough space on all sides
 	g := grid.New(10, 10)
 	r := router.NewAStarRouter(g)
+	net := Net{ID: 1, From: grid.Point{X: 1, Y: 1}, To: grid.Point{X: 1, Y: 8}, HalfWidth: 1}
 
-	path, err := r.Route(
-		grid.Point{X: 1, Y: 1},
-		grid.Point{X: 1, Y: 8},
-		1, 1, // netID=1, halfWidth=1
-	)
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, grid.Point{X: 1, Y: 1}, path[0])
@@ -227,7 +236,8 @@ func TestRoute_WithLineWidth_ObstacleTooClose_FindsDetour(t *testing.T) {
 
 	from := grid.Point{X: 5, Y: 1}
 	to := grid.Point{X: 5, Y: 8}
-	path, err := r.Route(from, to, 1, 1)
+	net := Net{ID: 1, From: from, To: to, HalfWidth: 1}
+	path, err := r.Route(net)
 
 	require.NoError(t, err)
 	assert.Equal(t, from, path[0])
@@ -269,11 +279,8 @@ func TestRoute_WithLineWidth_NoRoomToPass_ReturnsError(t *testing.T) {
 	}
 	r := router.NewAStarRouter(g)
 
-	_, err := r.Route(
-		grid.Point{X: 0, Y: 0},
-		grid.Point{X: 4, Y: 4},
-		1, 1,
-	)
+	net := Net{ID: 1, From: grid.Point{X: 0, Y: 0}, To: grid.Point{X: 4, Y: 4}, HalfWidth: 1}
+	_, err := r.Route(net)
 
 	assert.ErrorIs(t, err, router.ErrNoPath)
 }

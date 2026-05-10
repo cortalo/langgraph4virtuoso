@@ -9,6 +9,7 @@ var ErrOutOfBounds = errors.New("point out of bounds")
 var ErrClearOccupiedNotOccupied = errors.New("clear occupied not occupied")
 var ErrNetIDMismatch = errors.New("net id mismatch")
 var ErrCellNotOccupied = errors.New("cell not occupied by net")
+var ErrCellNotEmpty = errors.New("cell is not empty")
 
 // CellState 表示一个格子的状态
 type CellState int
@@ -81,6 +82,9 @@ func (g *Grid) GetNetID(p Point) (int, error) {
 func (g *Grid) SetOccupied(p Point, netID int) error {
 	if !g.InBounds(p) {
 		return ErrOutOfBounds
+	}
+	if g.cells[p.X][p.Y].State != CellEmpty {
+		return ErrCellNotEmpty
 	}
 	g.cells[p.X][p.Y].State = CellOccupied
 	g.cells[p.X][p.Y].NetID = netID

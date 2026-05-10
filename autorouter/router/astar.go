@@ -29,12 +29,12 @@ func NewAStarRouter(g Grid) *AStarRouter {
 	return &AStarRouter{grid: g}
 }
 
-func (r *AStarRouter) Route(from, to Point, netID int, halfWidth int) (Path, error) {
-	return r.route(from, to, netID, halfWidth, false)
+func (r *AStarRouter) Route(net Net) (Path, error) {
+	return r.route(net, false)
 }
 
-func (r *AStarRouter) RouteIgnoreOccupied(from, to Point, netID int, halfWidth int) (Path, error) {
-	return r.route(from, to, netID, halfWidth, true)
+func (r *AStarRouter) RouteIgnoreOccupied(net Net) (Path, error) {
+	return r.route(net, true)
 }
 
 func reconstructPath(n *node) Path {
@@ -49,7 +49,11 @@ func reconstructPath(n *node) Path {
 	return path
 }
 
-func (r *AStarRouter) route(from, to Point, netID, halfWidth int, ignoreOccupied bool) (Path, error) {
+func (r *AStarRouter) route(net Net, ignoreOccupied bool) (Path, error) {
+	from := net.From
+	to := net.To
+	netID := net.ID
+	halfWidth := net.HalfWidth
 	if from == to {
 		return Path{from}, nil
 	}

@@ -4,6 +4,7 @@ import "autorouter/common"
 
 type Point = common.Point
 type Path = common.Path
+type Net = common.Net
 
 type Grid interface {
 	IsPassable(p Point, netID, halfWidth int) bool
