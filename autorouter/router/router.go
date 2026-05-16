@@ -6,74 +6,76 @@ import (
 
 type Point = common.Point
 type Path = common.TwoLayerPath
-type Net = common.Net
 type Segment = common.Segment
+type TrackSegment = common.TrackSegment
 
 const M2Width = 1
 
 type Canvas interface {
-	AddM2(seg Segment, netID int) error
-	AddM3(trackID, startX, endX, netID int) error
-	GetM3TrackIndex(y int) (int, error)
-	GetM3YByID(trackID int) (int, int, error)
-	GetM3MaxDelta(index int) (int, error)
-	IsPassibleM3(trackID, netID, startX, endX int) bool
-	IsPassibleM2(leftX, netID, startY, endY int) bool
+	Inbound(p Point) bool
+	IsPassibleM2(seg Segment) bool
+	IsPassibleM3(seg TrackSegment) bool
+	GetLowerLeft() Point
+	GetUpperRight() Point
+	GetM3TrackWidth() int
 }
 
 type TwoLayerRouter struct {
 	canvas Canvas
 }
 
-func (r *TwoLayerRouter) Route(net Net) (Path, error) {
-	midY := (net.From.Y + net.To.Y) / 2
-	midTrack, err := r.canvas.GetM3TrackIndex(midY)
-	if err != nil {
-		return Path{}, err
-	}
-	maxDelta, err := r.canvas.GetM3MaxDelta(midTrack)
-	if err != nil {
-		return Path{}, err
-	}
-	for delta := 0; delta <= maxDelta; delta++ {
-		track := midTrack + delta
-		if r.tryPath(net, track) {
-			// TODO: return path
-			return Path{}, nil
-		}
-		track = midTrack - delta
-		if r.tryPath(net, track) {
-			// TODO: return path
-			return Path{}, nil
-		}
-	}
-	return Path{}, ErrNoPath
+func NewTwoLayerRouter(c Canvas) *TwoLayerRouter {
+	return &TwoLayerRouter{canvas: c}
 }
 
-func (r *TwoLayerRouter) tryPath(net Net, track int) bool {
-	leftPoint, rightPoint := net.From, net.To
-	if net.From.X > net.To.X {
-		leftPoint, rightPoint = net.To, net.From
+func (r *TwoLayerRouter) Route(from, to Point, netID int) (int, error) {
+	if !r.canvas.Inbound(from) || !r.canvas.Inbound(to) {
+		return 0, ErrOutOfBound
 	}
-	if r.canvas.IsPassibleM3(track, net.ID, leftPoint.X, rightPoint.X+M2Width) {
-		m3Y1, m3Y2, err := r.canvas.GetM3YByID(track)
-		if err != nil {
-			panic(err)
+	midY := (from.Y + to.Y) / 2
+	lowerLeft := r.canvas.GetLowerLeft()
+	upperRight := r.canvas.GetUpperRight()
+	midTrack := (midY - lowerLeft.Y) / r.canvas.GetM3TrackWidth()
+	maxTrack := (upperRight.Y-lowerLeft.Y)/r.canvas.GetM3TrackWidth() - 1
+	for delta := 0; (midTrack+delta <= maxTrack) || (midTrack-delta >= 0); delta++ {
+		if r.tryTrack(from, to, netID, midTrack+delta) {
+			return midTrack + delta, nil
 		}
-		if r.canvas.IsPassibleM2(net.From.X, net.ID, min(net.From.Y, m3Y1), max(net.From.Y, m3Y2)) &&
-			r.canvas.IsPassibleM2(net.To.X, net.ID, min(net.To.Y, m3Y1), max(net.To.Y, m3Y2)) {
-			//m2FromSegment := Segment{
-			//	Point:     Point{X: net.From.X, Y: min(net.From.Y, m3Y1)},
-			//	LineWidth: M2Width,
-			//	Length:    max(net.From.Y, m3Y2) - min(net.From.Y, m3Y1),
-			//}
-			//m2ToSegment := Segment{
-			//	Point:     Point{X: net.To.X, Y: min(net.To.Y, m3Y1)},
-			//	LineWidth: M2Width,
-			//	Length:    max(net.To.Y, m3Y2) - min(net.To.Y, m3Y1),
-			//}
-			return true
+		if r.tryTrack(from, to, netID, midTrack-delta) {
+			return midTrack - delta, nil
 		}
 	}
-	return false
+	return 0, ErrNoPath
+}
+
+func (r *TwoLayerRouter) tryTrack(from, to Point, netID, trackID int) bool {
+	lowerLeft := r.canvas.GetLowerLeft()
+	upperRight := r.canvas.GetUpperRight()
+	maxTrack := (upperRight.Y-lowerLeft.Y)/r.canvas.GetM3TrackWidth() - 1
+	if trackID < 0 || trackID > maxTrack {
+		return false
+	}
+
+	trackYLower := lowerLeft.Y + trackID*r.canvas.GetM3TrackWidth()
+	trackYUpper := lowerLeft.Y + (trackID+1)*r.canvas.GetM3TrackWidth()
+	m2From := Segment{
+		LowerLeft:  Point{X: from.X, Y: min(from.Y, trackYLower)},
+		UpperRight: Point{X: from.X + M2Width, Y: max(from.Y, trackYUpper)},
+		NetID:      netID,
+	}
+	m2To := Segment{
+		LowerLeft:  Point{X: to.X, Y: min(to.Y, trackYLower)},
+		UpperRight: Point{X: to.X + M2Width, Y: max(to.Y, trackYUpper)},
+		NetID:      netID,
+	}
+	m3 := TrackSegment{
+		TrackID: trackID,
+		Start:   min(from.X, to.X),
+		End:     max(from.X, to.X) + M2Width,
+		NetID:   netID,
+	}
+
+	return r.canvas.IsPassibleM2(m2From) &&
+		r.canvas.IsPassibleM2(m2To) &&
+		r.canvas.IsPassibleM3(m3)
 }

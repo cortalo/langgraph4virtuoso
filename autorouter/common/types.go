@@ -4,13 +4,22 @@ type Point struct {
 	X, Y int
 }
 
-type Path []Point
-
 type Segment struct {
-	// lower left corner point
-	Point     Point
-	LineWidth int
-	Length    int
+	LowerLeft  Point
+	UpperRight Point
+	NetID      int
+}
+
+func (s Segment) Overlap(other Segment) bool {
+	return s.LowerLeft.X < other.UpperRight.X && s.UpperRight.X > other.LowerLeft.X &&
+		s.LowerLeft.Y < other.UpperRight.Y && s.UpperRight.Y > other.LowerLeft.Y
+}
+
+type TrackSegment struct {
+	TrackID int
+	Start   int
+	End     int
+	NetID   int
 }
 
 type TwoLayerPath struct {

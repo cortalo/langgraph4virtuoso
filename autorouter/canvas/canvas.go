@@ -6,76 +6,63 @@ import (
 )
 
 type Point = common.Point
-type Path = common.TwoLayerPath
-type Net = common.Net
 type Segment = common.Segment
+type TrackSegment = common.TrackSegment
 
-var ErrOutOfBound = errors.New("out of bound")
-var ErrInvalidM3TrackID = errors.New("invalid m3 track ID")
+var ErrInvalidTrackID = errors.New("invalid m3 track ID")
 
 type Track interface {
 	IsPassible(netID, start, end int) bool
 	Occupy(netID, start, end int) error
 }
 
+type TrackSegmentStorage interface {
+	IsPassible(seg TrackSegment) bool
+	Occupy(seg TrackSegment) error
+	GetM3TrackWidth() int
+}
+
+type SegmentStorage interface {
+	IsPassible(seg Segment) bool
+	Occupy(seg Segment) error
+}
+
 type Canvas struct {
-	LeftBottom   Point
-	RightTop     Point
-	M3TrackWidth int // in nm
-	M3Tracks     []Track
+	LowerLeft  Point
+	UpperRight Point
+	M3Storage  TrackSegmentStorage
+	M2Storage  SegmentStorage
 }
 
-func (c *Canvas) AddM2(seg Segment, netID int) error {
-	return nil
+func (c *Canvas) Inbound(p Point) bool {
+	return p.X >= c.LowerLeft.X && p.X <= c.UpperRight.X &&
+		p.Y >= c.LowerLeft.Y && p.Y <= c.UpperRight.Y
 }
 
-func (c *Canvas) AddM3(trackID, startX, endX, netID int) error {
-	if !c.isValidM3TrackID(trackID) {
-		return ErrInvalidM3TrackID
-	}
-	return c.M3Tracks[trackID].Occupy(netID, startX, endX)
+func (c *Canvas) IsPassibleM2(seg Segment) bool {
+	return c.M2Storage.IsPassible(seg)
 }
 
-func (c *Canvas) GetM3TrackIndex(y int) (int, error) {
-	if y < c.getMinY() || y > c.getMaxY() {
-		return 0, ErrOutOfBound
-	}
-	return (y - c.getMinY()) / c.M3TrackWidth, nil
+func (c *Canvas) IsPassibleM3(seg TrackSegment) bool {
+	return c.M3Storage.IsPassible(seg)
 }
 
-func (c *Canvas) getMinY() int {
-	return c.LeftBottom.Y
+func (c *Canvas) OccupyM2(seg Segment) error {
+	return c.M2Storage.Occupy(seg)
 }
 
-func (c *Canvas) getMaxY() int {
-	return c.RightTop.Y
+func (c *Canvas) OccupyM3(seg TrackSegment) error {
+	return c.M3Storage.Occupy(seg)
 }
 
-func (c *Canvas) isValidM3TrackID(trackID int) bool {
-	if trackID < 0 {
-		return false
-	}
-	if c.getMinY()+(trackID+1)*c.M3TrackWidth > c.getMaxY() {
-		return false
-	}
-	return true
+func (c *Canvas) GetLowerLeft() Point {
+	return c.LowerLeft
 }
 
-func (c *Canvas) GetM3YByID(trackID int) (int, int, error) {
-	if !c.isValidM3TrackID(trackID) {
-		return 0, 0, ErrInvalidM3TrackID
-	}
-	return c.getMinY() + trackID*c.M3TrackWidth, c.getMinY() + (trackID+1)*c.M3TrackWidth, nil
+func (c *Canvas) GetUpperRight() Point {
+	return c.UpperRight
 }
 
-func (c *Canvas) GetM3MaxDelta(index int) (int, error) {
-	return 0, nil
-}
-
-func (c *Canvas) IsPassibleM3(trackID, netID, startX, endX int) bool {
-	return c.isValidM3TrackID(trackID) && c.M3Tracks[trackID].IsPassible(netID, startX, endX)
-}
-
-func (c *Canvas) IsPassibleM2(leftX, netID, startY, endY int) bool {
-	return false
+func (c *Canvas) GetM3TrackWidth() int {
+	return c.M3Storage.GetM3TrackWidth()
 }
